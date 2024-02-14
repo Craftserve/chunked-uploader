@@ -3,7 +3,6 @@ package chunkeduploader
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,18 +12,13 @@ import (
 
 	"github.com/Craftserve/chunked-uploader/pkg/checksum"
 	"github.com/Craftserve/chunked-uploader/pkg/files"
+	"github.com/Craftserve/chunked-uploader/pkg/logger"
 	"github.com/spf13/afero"
 )
 
 type ChunkedUploaderService struct {
 	fs afero.Fs
 	mu sync.Mutex
-}
-
-var logger = log.New(os.Stdout, "[chunked-uploader]: ", log.LstdFlags|log.Lshortfile)
-
-func Log(msg string) {
-	logger.Println(msg)
 }
 
 func NewChunkedUploaderService(fs afero.Fs) *ChunkedUploaderService {
@@ -325,7 +319,7 @@ func (c *ChunkedUploaderService) FinishUploadHandler(w http.ResponseWriter, r *h
 	if err != nil {
 		err = c.ClearPendingData(uploadId)
 		if err != nil {
-			Log("Failed to clear pending data, " + err.Error())
+			logger.Log("Failed to clear pending data, " + err.Error())
 		}
 
 		http.Error(w, "Failed to verify upload, "+err.Error(), http.StatusInternalServerError)
@@ -349,7 +343,7 @@ func (c *ChunkedUploaderService) FinishUploadHandler(w http.ResponseWriter, r *h
 
 	err = c.ClearPendingData(uploadId)
 	if err != nil {
-		Log("Failed to clear pending data, " + err.Error())
+		logger.Log("Failed to clear pending data, " + err.Error())
 	}
 
 	w.WriteHeader(http.StatusCreated)
