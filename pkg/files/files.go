@@ -32,7 +32,7 @@ func GetMetadataFilePath(uploadId string) string {
 func LockFile(file afero.File) error {
 	realFile, ok := file.(*os.File)
 	if !ok {
-		return fmt.Errorf("not a real file")
+		return fmt.Errorf("expected *os.File type, but received a different type")
 	}
 
 	err := syscall.Flock(int(realFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -45,7 +45,7 @@ func LockFile(file afero.File) error {
 func UnlockFile(file afero.File) error {
 	realFile, ok := file.(*os.File)
 	if !ok {
-		return fmt.Errorf("not a real file")
+		return fmt.Errorf("expected *os.File type, but received a different type")
 	}
 
 	return syscall.Flock(int(realFile.Fd()), syscall.LOCK_UN)

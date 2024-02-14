@@ -23,4 +23,5 @@ go.work
 .vscode
 .DS_Store
 /demo/uploads
-/.chunked_uploader
+.chunked_uploader
+demo/demo
