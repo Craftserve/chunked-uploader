@@ -25,3 +25,4 @@ go.work
 /demo/uploads
 .chunked_uploader
 demo/demo
+.pending
