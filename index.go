@@ -109,8 +109,9 @@ func (c *ChunkedUploaderService) writePart(path string, data io.Reader, offset i
 }
 
 // Cleanup removes old uploads that were created before a given timeLimit.
-func (c *ChunkedUploaderService) Cleanup(timeLimit time.Time) {
+func (c *ChunkedUploaderService) Cleanup(duration time.Duration) {
 	uploadsPath := getUploadPath(c.rootDir)
+	timeLimit := time.Now().Add(-duration)
 
 	afero.Walk(c.fs, uploadsPath, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
