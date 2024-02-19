@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/Craftserve/chunked-uploader/utils"
@@ -33,20 +32,11 @@ const (
 
 type ChunkedUploaderService struct {
 	fs      afero.Fs
-	mu      map[string]*sync.Mutex
 	rootDir string
 }
 
 func NewChunkedUploaderService(fs afero.Fs, rootDir string) *ChunkedUploaderService {
-	return &ChunkedUploaderService{fs: fs, mu: make(map[string]*sync.Mutex), rootDir: rootDir}
-}
-
-// getMutex returns a mutex for a given uploadId.
-func (c *ChunkedUploaderService) getMutex(uploadId string) *sync.Mutex {
-	v, _, _ := group.Do(uploadId, func() (interface{}, error) {
-		return &sync.Mutex{}, nil
-	})
-	return v.(*sync.Mutex)
+	return &ChunkedUploaderService{fs: fs, rootDir: rootDir}
 }
 
 func (c *ChunkedUploaderService) generateUploadId() string {
@@ -202,11 +192,6 @@ func (c *ChunkedUploaderService) UploadChunkHandler(w http.ResponseWriter, r *ht
 		return
 	}
 
-	mu := c.getMutex(uploadId)
-
-	mu.Lock()
-	defer mu.Unlock()
-
 	tempPath := getUploadFilePath(c.rootDir, uploadId)
 
 	err = r.ParseMultipartForm(100 << 20) // 100 MB max memory
@@ -249,8 +234,6 @@ func (c *ChunkedUploaderService) FinishUploadHandler(w http.ResponseWriter, r *h
 		writeJSONError(w, http.StatusBadRequest, "upload_id is required")
 		return
 	}
-
-	defer delete(c.mu, uploadId)
 
 	var req FinishUploadRequest
 	err := json.NewDecoder(r.Body).Decode(&req)
