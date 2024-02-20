@@ -17,11 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/spf13/afero"
-	"golang.org/x/sync/singleflight"
 )
-
-// group is used to ensure that only one goroutine works on a task.
-var group singleflight.Group
 
 type StandardUmask = fs.FileMode
 
@@ -31,12 +27,11 @@ const (
 )
 
 type ChunkedUploaderService struct {
-	fs      afero.Fs
-	rootDir string
+	fs afero.Fs
 }
 
-func NewChunkedUploaderService(fs afero.Fs, rootDir string) *ChunkedUploaderService {
-	return &ChunkedUploaderService{fs: fs, rootDir: rootDir}
+func NewChunkedUploaderService(fs afero.Fs) *ChunkedUploaderService {
+	return &ChunkedUploaderService{fs: fs}
 }
 
 func (c *ChunkedUploaderService) generateUploadId() string {
@@ -45,7 +40,7 @@ func (c *ChunkedUploaderService) generateUploadId() string {
 
 // createUpload creates a new upload with a given uploadId and maxSize, it allocates the file with the given size.
 func (c *ChunkedUploaderService) createUpload(uploadId string, maxSize int64) (err error) {
-	tempPath := getUploadFilePath(c.rootDir, uploadId)
+	tempPath := getUploadFilePath(uploadId)
 	file, err := createFile(c.fs, tempPath)
 
 	if err != nil {
@@ -100,7 +95,7 @@ func (c *ChunkedUploaderService) writePart(path string, data io.Reader, offset i
 
 // Cleanup removes old uploads that were created before a given timeLimit.
 func (c *ChunkedUploaderService) Cleanup(duration time.Duration) {
-	uploadsPath := getUploadPath(c.rootDir)
+	uploadsPath := getUploadPath()
 	timeLimit := time.Now().Add(-duration)
 
 	afero.Walk(c.fs, uploadsPath, func(path string, info fs.FileInfo, err error) error {
@@ -118,7 +113,7 @@ func (c *ChunkedUploaderService) Cleanup(duration time.Duration) {
 
 // VerifyUpload verifies an upload by comparing the checksum of the uploaded file with an expected checksum.
 func (c *ChunkedUploaderService) verifyUpload(uploadId string, expectedChecksum string) error {
-	pendingPath := getUploadFilePath(c.rootDir, uploadId)
+	pendingPath := getUploadFilePath(uploadId)
 
 	checksum, err := utils.ComputeChecksum(c.fs, pendingPath)
 	if err != nil {
@@ -142,7 +137,7 @@ func (c *ChunkedUploaderService) CreateUpload(fileSize int64) (string, error) {
 }
 
 func (c *ChunkedUploaderService) UploadChunk(uploadId string, data io.Reader, offset int64, computeHash bool) (*string, error) {
-	tempPath := getUploadFilePath(c.rootDir, uploadId)
+	tempPath := getUploadFilePath(uploadId)
 	return c.writePart(tempPath, data, offset, computeHash)
 }
 
@@ -151,7 +146,7 @@ func (c *ChunkedUploaderService) FinishUpload(uploadId string, expectedChecksum 
 }
 
 func (c *ChunkedUploaderService) OpenUploadedFile(uploadId string) (io.ReadCloser, error) {
-	path := getUploadFilePath(c.rootDir, uploadId)
+	path := getUploadFilePath(uploadId)
 	file, err := c.fs.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open uploaded file: %w", err)
@@ -161,7 +156,7 @@ func (c *ChunkedUploaderService) OpenUploadedFile(uploadId string) (io.ReadClose
 }
 
 func (c *ChunkedUploaderService) RenameUploadedFile(uploadId string, newPath string) error {
-	uploadPath := getUploadFilePath(c.rootDir, uploadId)
+	uploadPath := getUploadFilePath(uploadId)
 
 	dir := filepath.Dir(newPath)
 	if err := c.fs.MkdirAll(dir, StandardAccess); err != nil {
@@ -375,10 +370,10 @@ func writeJSONError(w http.ResponseWriter, statusCode int, message string) {
 	}
 }
 
-func getUploadFilePath(rootDir string, uploadId string) string {
-	return fmt.Sprintf("%s/.pending/%s", rootDir, uploadId)
+func getUploadFilePath(uploadId string) string {
+	return filepath.Join(".pending", uploadId)
 }
 
-func getUploadPath(rootDir string) string {
-	return fmt.Sprintf("%s/.pending", rootDir)
+func getUploadPath() string {
+	return ".pending"
 }

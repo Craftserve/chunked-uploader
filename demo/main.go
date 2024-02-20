@@ -11,8 +11,9 @@ import (
 
 func main() {
 	fs := afero.NewOsFs()
-	uploader := chunkeduploader.NewChunkedUploaderService(fs, ".")
-	handlers := chunkeduploader.NewChunkedUploaderHandler(uploader)
+	rootFs := afero.NewBasePathFs(fs, ".") // just to show that you can use base path fs
+	service := chunkeduploader.NewChunkedUploaderService(rootFs)
+	handlers := chunkeduploader.NewChunkedUploaderHandler(service)
 
 	r := mux.NewRouter()
 
