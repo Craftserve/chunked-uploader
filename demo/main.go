@@ -12,12 +12,14 @@ import (
 func main() {
 	fs := afero.NewOsFs()
 	uploader := chunkeduploader.NewChunkedUploaderService(fs, ".")
+	handlers := chunkeduploader.NewChunkedUploaderHandler(uploader)
 
 	r := mux.NewRouter()
-	r.HandleFunc("/init", uploader.CreateUploadHandler).Methods("POST")
-	r.HandleFunc("/upload/{upload_id}", uploader.UploadChunkHandler).Methods("POST")
-	r.HandleFunc("/finish/{upload_id}", uploader.FinishUploadHandler).Methods("POST")
-	r.HandleFunc("/rename/{upload_id}", uploader.RenameUploadedFileHandler).Methods("POST")
+
+	r.HandleFunc("/init", handlers.CreateUploadHandler).Methods("POST")
+	r.HandleFunc("/upload/{upload_id}", handlers.UploadChunkHandler).Methods("POST")
+	r.HandleFunc("/finish/{upload_id}", handlers.FinishUploadHandler).Methods("POST")
+	r.HandleFunc("/rename/{upload_id}", handlers.RenameUploadedFileHandler).Methods("POST")
 
 	fmt.Println("Server is running on port 8080")
 	err := http.ListenAndServe(":8080", r)

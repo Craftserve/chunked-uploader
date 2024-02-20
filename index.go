@@ -117,7 +117,7 @@ func (c *ChunkedUploaderService) Cleanup(duration time.Duration) {
 }
 
 // VerifyUpload verifies an upload by comparing the checksum of the uploaded file with an expected checksum.
-func (c *ChunkedUploaderService) VerifyUpload(uploadId string, expectedChecksum string) error {
+func (c *ChunkedUploaderService) verifyUpload(uploadId string, expectedChecksum string) error {
 	pendingPath := getUploadFilePath(c.rootDir, uploadId)
 
 	checksum, err := utils.ComputeChecksum(c.fs, pendingPath)
@@ -132,12 +132,59 @@ func (c *ChunkedUploaderService) VerifyUpload(uploadId string, expectedChecksum 
 	return nil
 }
 
+func (c *ChunkedUploaderService) CreateUpload(fileSize int64) (string, error) {
+	uploadId := c.generateUploadId()
+	err := c.createUpload(uploadId, fileSize)
+	if err != nil {
+		return "", fmt.Errorf("Failed to create upload: " + err.Error())
+	}
+	return uploadId, nil
+}
+
+func (c *ChunkedUploaderService) UploadChunk(uploadId string, data io.Reader, offset int64, computeHash bool) (*string, error) {
+	tempPath := getUploadFilePath(c.rootDir, uploadId)
+	return c.writePart(tempPath, data, offset, computeHash)
+}
+
+func (c *ChunkedUploaderService) FinishUpload(uploadId string, expectedChecksum string) error {
+	return c.verifyUpload(uploadId, expectedChecksum)
+}
+
+func (c *ChunkedUploaderService) OpenUploadedFile(uploadId string) (io.ReadCloser, error) {
+	path := getUploadFilePath(c.rootDir, uploadId)
+	file, err := c.fs.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open uploaded file: %w", err)
+	}
+
+	return file, nil
+}
+
+func (c *ChunkedUploaderService) RenameUploadedFile(uploadId string, newPath string) error {
+	uploadPath := getUploadFilePath(c.rootDir, uploadId)
+
+	dir := filepath.Dir(newPath)
+	if err := c.fs.MkdirAll(dir, StandardAccess); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	return c.fs.Rename(uploadPath, newPath)
+}
+
+type ChunkedUploaderHandler struct {
+	service *ChunkedUploaderService
+}
+
+func NewChunkedUploaderHandler(service *ChunkedUploaderService) *ChunkedUploaderHandler {
+	return &ChunkedUploaderHandler{service: service}
+}
+
 type CreateUploadRequest struct {
 	FileSize int64 `json:"file_size"`
 }
 
 // CreateUploadHandler creates a new upload with a given file size and returns an uploadId.
-func (c *ChunkedUploaderService) CreateUploadHandler(w http.ResponseWriter, r *http.Request) {
+func (c *ChunkedUploaderHandler) CreateUploadHandler(w http.ResponseWriter, r *http.Request) {
 	var req CreateUploadRequest
 
 	err := json.NewDecoder(r.Body).Decode(&req)
@@ -151,9 +198,7 @@ func (c *ChunkedUploaderService) CreateUploadHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	uploadId := c.generateUploadId()
-
-	err = c.createUpload(uploadId, req.FileSize)
+	uploadId, err := c.service.CreateUpload(req.FileSize)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Failed to create upload: "+err.Error())
 		return
@@ -164,7 +209,7 @@ func (c *ChunkedUploaderService) CreateUploadHandler(w http.ResponseWriter, r *h
 }
 
 // UploadChunkHandler uploads a chunk of a file to a given uploadId.
-func (c *ChunkedUploaderService) UploadChunkHandler(w http.ResponseWriter, r *http.Request) {
+func (c *ChunkedUploaderHandler) UploadChunkHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	uploadId := vars["upload_id"]
 
@@ -192,8 +237,6 @@ func (c *ChunkedUploaderService) UploadChunkHandler(w http.ResponseWriter, r *ht
 		return
 	}
 
-	tempPath := getUploadFilePath(c.rootDir, uploadId)
-
 	err = r.ParseMultipartForm(100 << 20) // 100 MB max memory
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Failed to parse multipart form: "+err.Error())
@@ -208,9 +251,9 @@ func (c *ChunkedUploaderService) UploadChunkHandler(w http.ResponseWriter, r *ht
 
 	defer requestFile.Close()
 
-	h, err := c.writePart(tempPath, requestFile, rangeStart, computeHash)
+	h, err := c.service.UploadChunk(uploadId, requestFile, rangeStart, computeHash)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "Failed to write part: "+err.Error())
+		writeJSONError(w, http.StatusInternalServerError, "Failed to upload chunk: "+err.Error())
 		return
 	}
 
@@ -226,7 +269,7 @@ type FinishUploadRequest struct {
 }
 
 // FinishUploadHandler finishes an upload by verifying the checksum of the uploaded file.
-func (c *ChunkedUploaderService) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
+func (c *ChunkedUploaderHandler) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	uploadId := vars["upload_id"]
 
@@ -249,7 +292,7 @@ func (c *ChunkedUploaderService) FinishUploadHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	err = c.VerifyUpload(uploadId, expectedChecksum)
+	err = c.service.FinishUpload(uploadId, expectedChecksum)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Failed to verify upload: "+err.Error())
 		return
@@ -259,13 +302,8 @@ func (c *ChunkedUploaderService) FinishUploadHandler(w http.ResponseWriter, r *h
 }
 
 // OpenUploadedFileHandler opens an uploaded file with a given uploadId and returns a file handle.
-func (c *ChunkedUploaderService) OpenUploadedFileHandler(upload_id string) (io.ReadCloser, error) {
-	path := getUploadFilePath(c.rootDir, upload_id)
-	file, err := c.fs.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open uploaded file: %w", err)
-	}
-	return file, nil
+func (c *ChunkedUploaderHandler) OpenUploadedFileHandler(uploadId string) (io.ReadCloser, error) {
+	return c.service.OpenUploadedFile(uploadId)
 }
 
 type RenameUploadedFileRequest struct {
@@ -273,7 +311,7 @@ type RenameUploadedFileRequest struct {
 }
 
 // RenameUploadedFileHandler renames an uploaded file to a given path.
-func (c *ChunkedUploaderService) RenameUploadedFileHandler(w http.ResponseWriter, r *http.Request) {
+func (c *ChunkedUploaderHandler) RenameUploadedFileHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	uploadId := vars["upload_id"]
 
@@ -289,16 +327,9 @@ func (c *ChunkedUploaderService) RenameUploadedFileHandler(w http.ResponseWriter
 		return
 	}
 
-	uploadPath := getUploadFilePath(c.rootDir, uploadId)
-	dir := filepath.Dir(req.Path)
-	if err := c.fs.MkdirAll(dir, StandardAccess); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to create directory: "+err.Error())
-		return
-	}
-
-	err = c.fs.Rename(uploadPath, req.Path)
+	err = c.service.RenameUploadedFile(uploadId, req.Path)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to rename file: "+err.Error())
+		writeJSONError(w, http.StatusInternalServerError, "Failed to rename uploaded file: "+err.Error())
 		return
 	}
 
