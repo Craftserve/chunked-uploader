@@ -1,4 +1,4 @@
-package checksum
+package utils
 
 import (
 	"crypto/sha256"

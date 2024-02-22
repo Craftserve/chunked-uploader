@@ -1,33 +1,47 @@
 package chunkeduploader
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
+	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
-	"sync"
 	"time"
 
-	"github.com/Craftserve/chunked-uploader/pkg/checksum"
-	"github.com/Craftserve/chunked-uploader/pkg/files"
-	"github.com/Craftserve/chunked-uploader/pkg/logger"
+	"github.com/Craftserve/chunked-uploader/utils"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"github.com/spf13/afero"
+)
+
+type StandardUmask = fs.FileMode
+
+const (
+	StandardAccess StandardUmask = 0755
+	OnlyRead       StandardUmask = 0400
 )
 
 type ChunkedUploaderService struct {
 	fs afero.Fs
-	mu sync.Mutex
 }
 
 func NewChunkedUploaderService(fs afero.Fs) *ChunkedUploaderService {
 	return &ChunkedUploaderService{fs: fs}
 }
 
-func (c *ChunkedUploaderService) CreatePendingFile(uploadId string, filename string) (err error) {
-	tempPath := files.GetPendingFilePath(uploadId, filename)
-	file, err := files.CreateFile(c.fs, tempPath)
+func (c *ChunkedUploaderService) generateUploadId() string {
+	return uuid.New().String()
+}
+
+// createUpload creates a new upload with a given uploadId and maxSize, it allocates the file with the given size.
+func (c *ChunkedUploaderService) createUpload(uploadId string, maxSize int64) (err error) {
+	tempPath := getUploadFilePath(uploadId)
+	file, err := createFile(c.fs, tempPath)
 
 	if err != nil {
 		return fmt.Errorf("Failed to create temp file: "+err.Error(), http.StatusInternalServerError)
@@ -35,61 +49,73 @@ func (c *ChunkedUploaderService) CreatePendingFile(uploadId string, filename str
 
 	defer file.Close()
 
+	err = file.Truncate(maxSize)
+	if err != nil {
+		return fmt.Errorf("Failed to preallocate file size: "+err.Error(), http.StatusInternalServerError)
+	}
+
 	return err
 }
 
-func (c *ChunkedUploaderService) CreateMetadataFile(uploadId string, fileSize int, path string, checksum string) (err error) {
-	metadataPath := files.GetMetadataFilePath(uploadId)
+// writePart writes a part of a file to a given path.
+func (c *ChunkedUploaderService) writePart(path string, data io.Reader, offset int64, computeHash bool) (*string, error) {
+	var writer io.Writer
+	var hasher hash.Hash
 
-	lastAttempt := time.Now().Unix()
-
-	metadata := map[string]interface{}{
-		"upload_id":   uploadId,
-		"last_attemp": lastAttempt,
-		"total_size":  fileSize,
-		"path":        path,
-		"checksum":    checksum,
-	}
-
-	file, err := files.CreateFile(c.fs, metadataPath)
+	file, err := c.fs.OpenFile(path, os.O_WRONLY, 0644)
 	if err != nil {
-		return fmt.Errorf("Failed to create metadata file, "+err.Error(), http.StatusInternalServerError)
+		return nil, err
 	}
-
 	defer file.Close()
 
-	err = files.LockFile(file)
+	if computeHash {
+		hasher = sha256.New()
+		writer = io.MultiWriter(file, hasher)
+	} else {
+		writer = file
+	}
+
+	_, err = file.Seek(offset, io.SeekStart)
 	if err != nil {
-		return fmt.Errorf("Failed to lock file, "+err.Error(), http.StatusInternalServerError)
+		return nil, err
 	}
 
-	encoder := json.NewEncoder(file)
-	if err = encoder.Encode(metadata); err != nil {
-		return fmt.Errorf("Failed to write metadata"+err.Error(), http.StatusInternalServerError)
-	}
-
-	err = files.UnlockFile(file)
+	_, err = io.Copy(writer, data)
 	if err != nil {
-		return fmt.Errorf("Failed to unlock file, "+err.Error(), http.StatusInternalServerError)
+		return nil, err
 	}
 
-	return nil
+	if computeHash {
+		hash := hex.EncodeToString(hasher.Sum(nil))
+		return &hash, nil
+	}
+
+	return nil, nil
 }
 
-func (c *ChunkedUploaderService) ClearPendingData(uploadId string) error {
-	pendingPath := files.GetPendingPath(uploadId)
-	err := c.fs.RemoveAll(pendingPath)
-	if err != nil {
-		return fmt.Errorf("failed to remove pending directory, "+err.Error(), http.StatusInternalServerError)
-	}
+// Cleanup removes old uploads that were created before a given timeLimit.
+func (c *ChunkedUploaderService) Cleanup(duration time.Duration) {
+	uploadsPath := getUploadPath()
+	timeLimit := time.Now().Add(-duration)
 
-	return nil
+	afero.Walk(c.fs, uploadsPath, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.ModTime().Before(timeLimit) {
+			return c.fs.Remove(path)
+		}
+
+		return nil
+	})
 }
 
-func (c *ChunkedUploaderService) VerifyUpload(uploadId string, filename string, expectedSize int64, expectedChecksum string) error {
-	pendingPath := files.GetPendingFilePath(uploadId, filename)
+// VerifyUpload verifies an upload by comparing the checksum of the uploaded file with an expected checksum.
+func (c *ChunkedUploaderService) verifyUpload(uploadId string, expectedChecksum string) error {
+	pendingPath := getUploadFilePath(uploadId)
 
-	checksum, err := checksum.ComputeChecksum(c.fs, pendingPath)
+	checksum, err := utils.ComputeChecksum(c.fs, pendingPath)
 	if err != nil {
 		return fmt.Errorf("Failed to compute checksum, " + err.Error())
 	}
@@ -101,250 +127,253 @@ func (c *ChunkedUploaderService) VerifyUpload(uploadId string, filename string, 
 	return nil
 }
 
-func (c *ChunkedUploaderService) InitUploadHandler(w http.ResponseWriter, r *http.Request) {
-	uploadId := r.URL.Query().Get("upload_id")
-	if uploadId == "" {
-		http.Error(w, "upload_id is required", http.StatusBadRequest)
-		return
-	}
-
-	fileSizeStr := r.URL.Query().Get("file_size")
-	if fileSizeStr == "" {
-		http.Error(w, "file_size is required", http.StatusBadRequest)
-		return
-	}
-
-	fileSize, err := strconv.ParseInt(fileSizeStr, 10, 64)
+func (c *ChunkedUploaderService) CreateUpload(fileSize int64) (string, error) {
+	uploadId := c.generateUploadId()
+	err := c.createUpload(uploadId, fileSize)
 	if err != nil {
-		http.Error(w, "file_size must be an integer", http.StatusBadRequest)
-		return
+		return "", fmt.Errorf("Failed to create upload: " + err.Error())
 	}
-
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		http.Error(w, "path is required", http.StatusBadRequest)
-		return
-	}
-
-	checksum := r.URL.Query().Get("checksum")
-	if path == "" {
-		http.Error(w, "checksum is required", http.StatusBadRequest)
-		return
-	}
-
-	err = c.CreateMetadataFile(uploadId, int(fileSize), path, checksum)
-	if err != nil {
-		http.Error(w, "Failed white creating metadata file, "+err.Error(), http.StatusInternalServerError)
-	}
-
-	filename := filepath.Base(path)
-	err = c.CreatePendingFile(uploadId, filename)
-	if err != nil {
-		http.Error(w, "Failed white creating temp file, "+err.Error(), http.StatusInternalServerError)
-	}
+	return uploadId, nil
 }
 
-func (c *ChunkedUploaderService) UploadChunkHandler(w http.ResponseWriter, r *http.Request) {
-	uploadId := r.URL.Query().Get("upload_id")
+func (c *ChunkedUploaderService) UploadChunk(uploadId string, data io.Reader, offset int64, computeHash bool) (*string, error) {
+	tempPath := getUploadFilePath(uploadId)
+	return c.writePart(tempPath, data, offset, computeHash)
+}
+
+func (c *ChunkedUploaderService) FinishUpload(uploadId string, expectedChecksum string) error {
+	return c.verifyUpload(uploadId, expectedChecksum)
+}
+
+func (c *ChunkedUploaderService) OpenUploadedFile(uploadId string) (io.ReadCloser, error) {
+	path := getUploadFilePath(uploadId)
+	file, err := c.fs.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open uploaded file: %w", err)
+	}
+
+	return file, nil
+}
+
+func (c *ChunkedUploaderService) RenameUploadedFile(uploadId string, newPath string) error {
+	uploadPath := getUploadFilePath(uploadId)
+
+	dir := filepath.Dir(newPath)
+	if err := c.fs.MkdirAll(dir, StandardAccess); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	return c.fs.Rename(uploadPath, newPath)
+}
+
+type ChunkedUploaderHandler struct {
+	service *ChunkedUploaderService
+}
+
+func NewChunkedUploaderHandler(service *ChunkedUploaderService) *ChunkedUploaderHandler {
+	return &ChunkedUploaderHandler{service: service}
+}
+
+type CreateUploadRequest struct {
+	FileSize int64 `json:"file_size"`
+}
+
+// CreateUploadHandler creates a new upload with a given file size and returns an uploadId.
+func (c *ChunkedUploaderHandler) CreateUploadHandler(w http.ResponseWriter, r *http.Request) {
+	var req CreateUploadRequest
+
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	if req.FileSize <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "Invalid file_size, must be a positive integer")
+		return
+	}
+
+	uploadId, err := c.service.CreateUpload(req.FileSize)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "Failed to create upload: "+err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"upload_id": uploadId})
+}
+
+// UploadChunkHandler uploads a chunk of a file to a given uploadId.
+func (c *ChunkedUploaderHandler) UploadChunkHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	uploadId := vars["upload_id"]
+
 	if uploadId == "" {
-		http.Error(w, "upload_id is required", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "upload_id is required")
 		return
 	}
 
-	metadataPath := files.GetMetadataFilePath(uploadId)
+	computeHash := r.URL.Query().Get("computeHash") == "true"
 
-	rangeStartStr := r.URL.Query().Get("range_start")
-	if rangeStartStr == "" {
-		http.Error(w, "range_start is required", http.StatusBadRequest)
+	rangeHeader := r.Header.Get("Range")
+	if rangeHeader == "" {
+		writeJSONError(w, http.StatusBadRequest, "Range header is required")
 		return
 	}
 
-	rangeStart, err := strconv.ParseInt(rangeStartStr, 10, 64)
+	rangeStart, rangeEnd, err := parseRangeHeader(rangeHeader)
 	if err != nil {
-		http.Error(w, "range_start must be an integer", http.StatusBadRequest)
-		return
-	}
-
-	rangeEndStr := r.URL.Query().Get("range_end")
-	if rangeEndStr == "" {
-		http.Error(w, "range_end is required", http.StatusBadRequest)
-		return
-	}
-
-	rangeEnd, err := strconv.ParseInt(rangeEndStr, 10, 64)
-	if err != nil {
-
-		http.Error(w, "range_end must be an integer", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "Invalid Range header")
 		return
 	}
 
 	if rangeStart > rangeEnd {
-		http.Error(w, "range_start must be less than or equal to range_end", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "Invalid Range header")
 		return
 	}
-
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		http.Error(w, "path is required", http.StatusBadRequest)
-		return
-	}
-
-	filename := filepath.Base(path)
-
-	tempPath := files.GetPendingFilePath(uploadId, filename)
-	file, err := files.OpenFile(c.fs, tempPath, os.O_WRONLY, files.OnlyRead)
-	if err != nil {
-
-		http.Error(w, "Failed to open temp file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	defer file.Close()
-
-	metadataFile, err := files.OpenFile(c.fs, metadataPath, os.O_RDONLY, files.OnlyRead)
-	if err != nil {
-
-		http.Error(w, "Failed to open metadata file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	_, err = file.Seek(rangeStart, 0)
-	if err != nil {
-
-		http.Error(w, "Failed to seek to range_start, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	buf := make([]byte, rangeEnd-rangeStart)
 
 	err = r.ParseMultipartForm(100 << 20) // 100 MB max memory
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "Failed to parse multipart form: "+err.Error())
 		return
 	}
 
 	requestFile, _, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "Could not get file", http.StatusInternalServerError)
+		writeJSONError(w, http.StatusBadRequest, "file is required")
 		return
 	}
 
 	defer requestFile.Close()
 
+	h, err := c.service.UploadChunk(uploadId, requestFile, rangeStart, computeHash)
 	if err != nil {
-		http.Error(w, "Failed to read request body, "+err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "Failed to upload chunk: "+err.Error())
 		return
 	}
 
-	_, err = requestFile.Read(buf)
-	if err != nil {
-
-		http.Error(w, "Could not read file"+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	_, err = file.Write(buf)
-	if err != nil {
-
-		http.Error(w, "Failed to write to file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	decoder := json.NewDecoder(metadataFile)
-	var metadata map[string]interface{}
-	err = decoder.Decode(&metadata)
-	if err != nil {
-		http.Error(w, "Failed to read metadata file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	metadata["last_attempt"] = time.Now().Unix()
-
-	metadataFile.Seek(0, 0)
-	encoder := json.NewEncoder(metadataFile)
-	err = encoder.Encode(metadata)
-	if err != nil {
-		http.Error(w, "Failed to write metadata file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-}
-
-func (c *ChunkedUploaderService) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
-	uploadId := r.URL.Query().Get("upload_id")
-	if uploadId == "" {
-		http.Error(w, "upload_id is required", http.StatusBadRequest)
-		return
-	}
-
-	metadataPath := files.GetMetadataFilePath(uploadId)
-	file, err := c.fs.Open(metadataPath)
-	if err != nil {
-		http.Error(w, "Failed to open metadata file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	defer file.Close()
-
-	err = files.LockFile(file)
-
-	if err != nil {
-		http.Error(w, "Failed to lock metadata file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	decoder := json.NewDecoder(file)
-	var metadata map[string]interface{}
-	err = decoder.Decode(&metadata)
-	if err != nil {
-		http.Error(w, "Failed to read metadata file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	err = files.UnlockFile(file)
-
-	if err != nil {
-		http.Error(w, "Failed to unlock metadata file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	path := metadata["path"].(string)
-	filename := filepath.Base(path)
-	fileSize := int64(metadata["total_size"].(float64))
-	expectedChecksum := metadata["checksum"].(string)
-
-	err = c.VerifyUpload(uploadId, filename, fileSize, expectedChecksum)
-	if err != nil {
-		err = c.ClearPendingData(uploadId)
-		if err != nil {
-			logger.Log("Failed to clear pending data, " + err.Error())
-		}
-
-		http.Error(w, "Failed to verify upload, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	pendingPath := files.GetPendingFilePath(uploadId, filename)
-	basePath := filepath.Dir(path)
-
-	err = c.fs.MkdirAll(basePath, files.StandardAccess)
-	if err != nil {
-		http.Error(w, "Failed to create directory, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	err = c.fs.Rename(pendingPath, path)
-	if err != nil {
-		http.Error(w, "Failed to move file, "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	err = c.ClearPendingData(uploadId)
-	if err != nil {
-		logger.Log("Failed to clear pending data, " + err.Error())
+	if h != nil {
+		w.Header().Set("X-Checksum", *h)
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+type FinishUploadRequest struct {
+	Checksum string `json:"checksum"`
+}
+
+// FinishUploadHandler finishes an upload by verifying the checksum of the uploaded file.
+func (c *ChunkedUploaderHandler) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	uploadId := vars["upload_id"]
+
+	if uploadId == "" {
+		writeJSONError(w, http.StatusBadRequest, "upload_id is required")
+		return
+	}
+
+	var req FinishUploadRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	expectedChecksum := req.Checksum
+
+	if expectedChecksum == "" {
+		writeJSONError(w, http.StatusBadRequest, "checksum is required")
+		return
+	}
+
+	err = c.service.FinishUpload(uploadId, expectedChecksum)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Failed to verify upload: "+err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// OpenUploadedFileHandler opens an uploaded file with a given uploadId and returns a file handle.
+func (c *ChunkedUploaderHandler) OpenUploadedFileHandler(uploadId string) (io.ReadCloser, error) {
+	return c.service.OpenUploadedFile(uploadId)
+}
+
+type RenameUploadedFileRequest struct {
+	Path string
+}
+
+// RenameUploadedFileHandler renames an uploaded file to a given path.
+func (c *ChunkedUploaderHandler) RenameUploadedFileHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	uploadId := vars["upload_id"]
+
+	if uploadId == "" {
+		writeJSONError(w, http.StatusBadRequest, "upload_id is required")
+		return
+	}
+
+	var req RenameUploadedFileRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	err = c.service.RenameUploadedFile(uploadId, req.Path)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "Failed to rename uploaded file: "+err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// openFile opens a file with a given path and returns a file handle, it creates the directory if it does not exist.
+func openFile(fs afero.Fs, path string, flag int, perm os.FileMode) (file afero.File, err error) {
+	dir := filepath.Dir(path)
+	if err := fs.MkdirAll(dir, perm); err != nil {
+		return nil, fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	file, err = fs.OpenFile(path, flag, perm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	return file, nil
+}
+
+// createFile creates a file with a given path and returns a file handle.
+func createFile(fs afero.Fs, path string) (file afero.File, err error) {
+	return openFile(fs, path, os.O_CREATE|os.O_RDWR, StandardAccess)
+}
+
+// parseRangeHeader parses a range header and returns the start and end of the range.
+func parseRangeHeader(rangeHeader string) (int64, int64, error) {
+	var start, end int64
+	_, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+	if err != nil {
+		return 0, 0, err
+	}
+	return start, end, nil
+}
+
+// writeJSONError writes a JSON error response with a given status code and message.
+func writeJSONError(w http.ResponseWriter, statusCode int, message string) {
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func getUploadFilePath(uploadId string) string {
+	return filepath.Join(".pending", uploadId)
+}
+
+func getUploadPath() string {
+	return ".pending"
 }
