@@ -27,3 +27,5 @@ go.work
 demo/demo
 .pending
 node_modules
+.cache
+/demo/dist
