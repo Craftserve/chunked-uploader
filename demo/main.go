@@ -22,8 +22,8 @@ func main() {
 	r.HandleFunc("/finish/{upload_id}", handlers.FinishUploadHandler).Methods("POST")
 	r.HandleFunc("/rename/{upload_id}", handlers.RenameUploadedFileHandler).Methods("POST")
 
-	fmt.Println("Server is running on port 8080")
-	err := http.ListenAndServe(":8080", r)
+	fmt.Println("Server is running on port 8081")
+	err := http.ListenAndServe(":8081", r)
 	if err != nil {
 		fmt.Println("Error starting the server:", err)
 	}
