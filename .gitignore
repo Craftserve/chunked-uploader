@@ -26,3 +26,7 @@ go.work
 .chunked_uploader
 demo/demo
 .pending
+node_modules
+.cache
+/demo/dist
+/demo/demo

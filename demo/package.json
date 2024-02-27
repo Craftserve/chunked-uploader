@@ -1,0 +1,12 @@
+{
+  "dependencies": {
+    "ts-chunked-uploader": "github:Craftserve/ts-chunked-uploader"
+  },
+  "devDependencies": {
+    "parcel-bundler": "^1.12.5"
+  },
+  "scripts": {
+    "start": "parcel index.html",
+    "build": "parcel build index.html"
+  }
+}
