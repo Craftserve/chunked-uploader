@@ -293,7 +293,10 @@ func (c *ChunkedUploaderHandler) FinishUploadHandler(w http.ResponseWriter, r *h
 		return
 	}
 
+	pendingPath := getUploadFilePath(uploadId)
+
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"path": pendingPath})
 }
 
 // OpenUploadedFileHandler opens an uploaded file with a given uploadId and returns a file handle.
