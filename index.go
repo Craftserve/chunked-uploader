@@ -141,8 +141,15 @@ func (c *ChunkedUploaderService) UploadChunk(uploadId string, data io.Reader, of
 	return c.writePart(tempPath, data, offset, computeHash)
 }
 
-func (c *ChunkedUploaderService) FinishUpload(uploadId string, expectedChecksum string) error {
-	return c.verifyUpload(uploadId, expectedChecksum)
+func (c *ChunkedUploaderService) FinishUpload(uploadId string, expectedChecksum string) (path string, err error) {
+	err = c.verifyUpload(uploadId, expectedChecksum)
+	if err != nil {
+		return "", fmt.Errorf("Failed to verify upload: " + err.Error())
+	}
+
+	path = getUploadFilePath(uploadId)
+
+	return path, nil
 }
 
 func (c *ChunkedUploaderService) OpenUploadedFile(uploadId string) (io.ReadCloser, error) {
@@ -287,16 +294,14 @@ func (c *ChunkedUploaderHandler) FinishUploadHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	err = c.service.FinishUpload(uploadId, expectedChecksum)
+	path, err := c.service.FinishUpload(uploadId, expectedChecksum)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Failed to verify upload: "+err.Error())
 		return
 	}
 
-	pendingPath := getUploadFilePath(uploadId)
-
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"path": pendingPath})
+	json.NewEncoder(w).Encode(map[string]string{"path": path})
 }
 
 // OpenUploadedFileHandler opens an uploaded file with a given uploadId and returns a file handle.
