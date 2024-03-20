@@ -9,7 +9,7 @@ import (
 )
 
 func ComputeChecksum(fs afero.Fs, path string) (string, error) {
-	file, err := fs.Open(path)
+	file, err := fs.OpenFile(path, 0, 0)
 	if err != nil {
 		return "", err
 	}

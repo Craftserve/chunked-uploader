@@ -117,7 +117,7 @@ func (c *ChunkedUploaderService) verifyUpload(uploadId string, expectedChecksum 
 
 	checksum, err := utils.ComputeChecksum(c.fs, pendingPath)
 	if err != nil {
-		return fmt.Errorf("Failed to compute checksum, " + err.Error())
+		return fmt.Errorf("Failed to compute checksum, "+err.Error()+"Pending path: ", pendingPath)
 	}
 
 	if checksum != expectedChecksum {
