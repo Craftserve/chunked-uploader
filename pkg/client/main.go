@@ -50,7 +50,7 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 		return "", err
 	}
 
-	body := bytes.NewBuffer([]byte(fmt.Sprintf("{fiile_size: %d}", fileInfo.Size())))
+	body := bytes.NewBuffer([]byte(fmt.Sprintf("{file_size: %d}", fileInfo.Size())))
 
 	req, err := http.NewRequest("POST", c.Endpoints.Init, body)
 	if err != nil {
