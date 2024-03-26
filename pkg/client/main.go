@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -163,7 +164,8 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 		return "", err
 	}
 
-	body = bytes.NewBuffer([]byte(fmt.Sprintf(`{"checksum": "%x"}`, hash)))
+	hexHash := hex.EncodeToString(hash.Sum(nil))
+	body = bytes.NewBuffer([]byte(fmt.Sprintf(`{"checksum": "%x"}`, hexHash)))
 
 	req, err = http.NewRequest("POST", c.Endpoints.Finish, body)
 	if err != nil {
