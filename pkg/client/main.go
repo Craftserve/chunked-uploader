@@ -21,7 +21,7 @@ type ClientEndpoints struct {
 }
 
 type ClientConfig struct {
-	cookies *[]http.Cookie
+	Cookies *[]http.Cookie
 }
 
 type InitResponse struct {
@@ -58,7 +58,7 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	for _, cookie := range *c.Config.cookies {
+	for _, cookie := range *c.Config.Cookies {
 		req.AddCookie(&cookie)
 	}
 
@@ -127,7 +127,7 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 			}
 
 			req.Header.Set("Content-Type", writer.FormDataContentType())
-			for _, cookie := range *c.Config.cookies {
+			for _, cookie := range *c.Config.Cookies {
 				req.AddCookie(&cookie)
 			}
 
@@ -171,7 +171,7 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	for _, cookie := range *c.Config.cookies {
+	for _, cookie := range *c.Config.Cookies {
 		req.AddCookie(&cookie)
 	}
 
