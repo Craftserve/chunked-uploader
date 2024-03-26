@@ -20,6 +20,10 @@ type ClientEndpoints struct {
 	Finish string
 }
 
+type ClientConfig struct {
+	cookies *[]http.Cookie
+}
+
 type InitResponse struct {
 	UploadID string `json:"upload_id"`
 }
@@ -30,11 +34,13 @@ type FinishResponse struct {
 
 type Client struct {
 	Endpoints ClientEndpoints
+	Config    ClientConfig
 }
 
-func NewClient(endpoints ClientEndpoints) *Client {
+func NewClient(endpoints ClientEndpoints, config *ClientConfig) *Client {
 	return &Client{
 		Endpoints: endpoints,
+		Config:    *config,
 	}
 }
 
@@ -52,6 +58,9 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	for _, cookie := range *c.Config.cookies {
+		req.AddCookie(&cookie)
+	}
 
 	client := &http.Client{}
 	res, err := client.Do(req)
@@ -118,6 +127,9 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 			}
 
 			req.Header.Set("Content-Type", writer.FormDataContentType())
+			for _, cookie := range *c.Config.cookies {
+				req.AddCookie(&cookie)
+			}
 
 			client := &http.Client{}
 			res, err := client.Do(req)
@@ -159,6 +171,9 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	for _, cookie := range *c.Config.cookies {
+		req.AddCookie(&cookie)
+	}
 
 	client = &http.Client{}
 
