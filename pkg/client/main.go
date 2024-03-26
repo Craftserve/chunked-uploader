@@ -85,7 +85,7 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 	c.Endpoints.Upload = strings.Replace(c.Endpoints.Upload, "{upload_id}", upload_id, 1)
 	c.Endpoints.Finish = strings.Replace(c.Endpoints.Finish, "{upload_id}", upload_id, 1)
 
-	noOfChunks := math.Ceil(float64(fileInfo.Size() / int64(chunkSize)))
+	noOfChunks := math.Ceil(float64(fileInfo.Size() / chunkSize))
 
 	var wg sync.WaitGroup
 	errc := make(chan error, 10)
@@ -127,7 +127,7 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 			}
 
 			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end-1))
 			for _, cookie := range c.Config.Cookies {
 				req.AddCookie(cookie)
 			}
