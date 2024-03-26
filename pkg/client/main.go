@@ -127,7 +127,7 @@ func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) 
 			}
 
 			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("Range", fmt.Sprintf("bytes %d-%d", start, end))
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 			for _, cookie := range c.Config.Cookies {
 				req.AddCookie(cookie)
 			}
