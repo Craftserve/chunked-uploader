@@ -3,13 +3,13 @@ interface Endpoints {
     upload: string;
     finish: string;
 }
-interface FileUploaderConfig {
-    chunkSize: number;
+interface ChunkedUploaderClientProps {
     endpoints: Endpoints;
     headers?: HeadersInit;
 }
-declare class FileUploader {
+export declare class ChunkedUploaderClient {
     private config;
-    constructor(config: FileUploaderConfig);
-    upload(file: File): Promise<any>;
+    constructor(config: ChunkedUploaderClientProps);
+    upload(file: File, chunkSize: number): Promise<string>;
 }
+export {};
