@@ -20,7 +20,6 @@ func main() {
 	r.HandleFunc("/init", handlers.CreateUploadHandler).Methods("POST")
 	r.HandleFunc("/upload/{upload_id}", handlers.UploadChunkHandler).Methods("POST")
 	r.HandleFunc("/finish/{upload_id}", handlers.FinishUploadHandler).Methods("POST")
-	r.HandleFunc("/rename/{upload_id}", handlers.RenameUploadedFileHandler).Methods("POST")
 
 	fmt.Println("Server is running on port 8081")
 	err := http.ListenAndServe(":8081", r)

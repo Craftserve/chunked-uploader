@@ -49,9 +49,11 @@ func (c *ChunkedUploaderService) createUpload(uploadId string, maxSize int64) (e
 
 	defer file.Close()
 
-	err = file.Truncate(maxSize)
-	if err != nil {
-		return fmt.Errorf("Failed to preallocate file size: "+err.Error(), http.StatusInternalServerError)
+	if maxSize != -1 {
+		err = file.Truncate(maxSize)
+		if err != nil {
+			return fmt.Errorf("Failed to preallocate file size: "+err.Error(), http.StatusInternalServerError)
+		}
 	}
 
 	return err
@@ -162,17 +164,6 @@ func (c *ChunkedUploaderService) OpenUploadedFile(uploadId string) (io.ReadClose
 	return file, nil
 }
 
-func (c *ChunkedUploaderService) RenameUploadedFile(uploadId string, newPath string) error {
-	uploadPath := getUploadFilePath(uploadId)
-
-	dir := filepath.Dir(newPath)
-	if err := c.fs.MkdirAll(dir, StandardAccess); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	return c.fs.Rename(uploadPath, newPath)
-}
-
 type ChunkedUploaderHandler struct {
 	service *ChunkedUploaderService
 }
@@ -192,11 +183,6 @@ func (c *ChunkedUploaderHandler) CreateUploadHandler(w http.ResponseWriter, r *h
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
-		return
-	}
-
-	if req.FileSize <= 0 {
-		writeJSONError(w, http.StatusBadRequest, "Invalid file_size, must be a positive integer")
 		return
 	}
 
@@ -300,43 +286,8 @@ func (c *ChunkedUploaderHandler) FinishUploadHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"path": path})
-}
-
-// OpenUploadedFileHandler opens an uploaded file with a given uploadId and returns a file handle.
-func (c *ChunkedUploaderHandler) OpenUploadedFileHandler(uploadId string) (io.ReadCloser, error) {
-	return c.service.OpenUploadedFile(uploadId)
-}
-
-type RenameUploadedFileRequest struct {
-	Path string
-}
-
-// RenameUploadedFileHandler renames an uploaded file to a given path.
-func (c *ChunkedUploaderHandler) RenameUploadedFileHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	uploadId := vars["upload_id"]
-
-	if uploadId == "" {
-		writeJSONError(w, http.StatusBadRequest, "upload_id is required")
-		return
-	}
-
-	var req RenameUploadedFileRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
-		return
-	}
-
-	err = c.service.RenameUploadedFile(uploadId, req.Path)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "Failed to rename uploaded file: "+err.Error())
-		return
-	}
-
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"path": path})
 }
 
 // openFile opens a file with a given path and returns a file handle, it creates the directory if it does not exist.
