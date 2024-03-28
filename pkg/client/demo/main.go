@@ -3,20 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
+	"net/http"
 	"os"
 
 	client "github.com/Craftserve/chunked-uploader/pkg/client"
 )
 
 func main() {
-	client := client.NewClient(client.ClientEndpoints{
-		Init:   "http://localhost:8081/init",
-		Upload: "http://localhost:8081/upload/{upload_id}",
-		Finish: "http://localhost:8081/finish/{upload_id}",
-	}, nil, client.ClientConfig{
-		MaxChunkSize: 500,
-	})
+	httpClient := http.Client{}
+
+	client := client.Client{
+		Endpoint:  "http://localhost:8081",
+		ChunkSize: 500,
+		DoRequest: httpClient.Do,
+	}
 
 	file, err := os.Open("test2.zip")
 	if err != nil {
@@ -25,13 +25,9 @@ func main() {
 
 	defer file.Close()
 
-	fileReader := io.ReadCloser(file)
-
-	defer fileReader.Close()
-
 	ctx := context.Background()
 
-	path, err := client.Upload(ctx, fileReader)
+	path, err := client.Upload(ctx, file)
 
 	if err != nil {
 		panic(err)

@@ -60,39 +60,40 @@ func (c *ChunkedUploaderService) createUpload(uploadId string, maxSize int64) (e
 }
 
 // writePart writes a part of a file to a given path.
-func (c *ChunkedUploaderService) writePart(path string, data io.Reader, offset int64, computeHash bool) (*string, error) {
+func (c *ChunkedUploaderService) writePart(path string, reader io.Reader, offset int64) (h string, err error) {
 	var writer io.Writer
-	var hasher hash.Hash
+	var hasher hash.Hash = sha256.New()
 
 	file, err := c.fs.OpenFile(path, os.O_WRONLY, 0644)
 	if err != nil {
-		return nil, err
+		return h, err
 	}
 	defer file.Close()
 
-	if computeHash {
-		hasher = sha256.New()
-		writer = io.MultiWriter(file, hasher)
-	} else {
-		writer = file
+	writer = io.MultiWriter(file, hasher)
+
+	if offset != -1 {
+		_, err = file.Seek(offset, io.SeekStart)
+		if err != nil {
+			return h, err
+		}
 	}
 
-	_, err = file.Seek(offset, io.SeekStart)
+	if offset == -1 {
+		_, err = file.Seek(0, io.SeekEnd)
+		if err != nil {
+			return h, err
+		}
+	}
+
+	_, err = io.Copy(writer, reader)
 	if err != nil {
-		return nil, err
+		return h, err
 	}
 
-	_, err = io.Copy(writer, data)
-	if err != nil {
-		return nil, err
-	}
+	h = hex.EncodeToString(hasher.Sum(nil))
 
-	if computeHash {
-		hash := hex.EncodeToString(hasher.Sum(nil))
-		return &hash, nil
-	}
-
-	return nil, nil
+	return h, nil
 }
 
 // Cleanup removes old uploads that were created before a given timeLimit.
@@ -138,9 +139,9 @@ func (c *ChunkedUploaderService) CreateUpload(fileSize int64) (string, error) {
 	return uploadId, nil
 }
 
-func (c *ChunkedUploaderService) UploadChunk(uploadId string, data io.Reader, offset int64, computeHash bool) (*string, error) {
+func (c *ChunkedUploaderService) UploadChunk(uploadId string, data io.Reader, offset int64, computeHash bool) (string, error) {
 	tempPath := getUploadFilePath(uploadId)
-	return c.writePart(tempPath, data, offset, computeHash)
+	return c.writePart(tempPath, data, offset)
 }
 
 func (c *ChunkedUploaderService) FinishUpload(uploadId string, expectedChecksum string) (path string, err error) {
@@ -173,7 +174,7 @@ func NewChunkedUploaderHandler(service *ChunkedUploaderService) *ChunkedUploader
 }
 
 type CreateUploadRequest struct {
-	FileSize int64 `json:"file_size"`
+	FileSize *int64 `json:"file_size"`
 }
 
 // CreateUploadHandler creates a new upload with a given file size and returns an uploadId.
@@ -186,7 +187,12 @@ func (c *ChunkedUploaderHandler) CreateUploadHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	uploadId, err := c.service.CreateUpload(req.FileSize)
+	var fileSize int64 = -1
+	if req.FileSize != nil {
+		fileSize = *req.FileSize
+	}
+
+	uploadId, err := c.service.CreateUpload(fileSize)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Failed to create upload: "+err.Error())
 		return
@@ -209,47 +215,29 @@ func (c *ChunkedUploaderHandler) UploadChunkHandler(w http.ResponseWriter, r *ht
 	computeHash := r.URL.Query().Get("computeHash") == "true"
 
 	rangeHeader := r.Header.Get("Range")
-	if rangeHeader == "" {
-		writeJSONError(w, http.StatusBadRequest, "Range header is required")
-		return
+
+	var rangeStart int64 = -1
+
+	if rangeHeader != "" {
+		var err error
+		rangeStart, err = parseRangeHeader(rangeHeader)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Invalid Range header")
+			return
+		}
 	}
 
-	rangeStart, rangeEnd, err := parseRangeHeader(rangeHeader)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid Range header")
-		return
-	}
+	// it will be io.Reader sent wit application/octet-stream
+	fileReader := r.Body
 
-	if rangeStart > rangeEnd {
-		writeJSONError(w, http.StatusBadRequest, "Invalid Range header")
-		return
-	}
-
-	err = r.ParseMultipartForm(100 << 20) // 100 MB max memory
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "Failed to parse multipart form: "+err.Error())
-		return
-	}
-
-	requestFile, _, err := r.FormFile("file")
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "file is required")
-		return
-	}
-
-	defer requestFile.Close()
-
-	h, err := c.service.UploadChunk(uploadId, requestFile, rangeStart, computeHash)
+	h, err := c.service.UploadChunk(uploadId, fileReader, rangeStart, computeHash)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Failed to upload chunk: "+err.Error())
 		return
 	}
 
-	if h != nil {
-		w.Header().Set("X-Checksum", *h)
-	}
-
-	w.WriteHeader(http.StatusCreated)
+	w.Header().Set("X-Checksum", h)
+	w.WriteHeader(http.StatusOK)
 }
 
 type FinishUploadRequest struct {
@@ -286,7 +274,7 @@ func (c *ChunkedUploaderHandler) FinishUploadHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"path": path})
 }
 
@@ -310,14 +298,14 @@ func createFile(fs afero.Fs, path string) (file afero.File, err error) {
 	return openFile(fs, path, os.O_CREATE|os.O_RDWR, StandardAccess)
 }
 
-// parseRangeHeader parses a range header and returns the start and end of the range.
-func parseRangeHeader(rangeHeader string) (int64, int64, error) {
-	var start, end int64
-	_, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+// parseRangeHeader parses a range header and returns range start
+func parseRangeHeader(rangeHeader string) (int64, error) {
+	var start int64
+	_, err := fmt.Sscanf(rangeHeader, "bytes %d-", &start)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
-	return start, end, nil
+	return start, nil
 }
 
 // writeJSONError writes a JSON error response with a given status code and message.
