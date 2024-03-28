@@ -2,8 +2,8 @@
   "name": "ts-chunked-uploader",
   "version": "1.0.0",
   "description": "TS client for chunked-uplaoder",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/ChunkedUploaderClient.js",
+  "types": "dist/ChunkedUploaderClient.d.ts",
   "scripts": {
     "build": "tsc",
     "prepare": "npm run build",
