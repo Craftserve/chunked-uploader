@@ -139,7 +139,7 @@ func (c *ChunkedUploaderService) CreateUpload(fileSize int64) (string, error) {
 	return uploadId, nil
 }
 
-func (c *ChunkedUploaderService) UploadChunk(uploadId string, data io.Reader, offset int64, computeHash bool) (string, error) {
+func (c *ChunkedUploaderService) UploadChunk(uploadId string, data io.Reader, offset int64) (string, error) {
 	tempPath := getUploadFilePath(uploadId)
 	return c.writePart(tempPath, data, offset)
 }
@@ -212,8 +212,6 @@ func (c *ChunkedUploaderHandler) UploadChunkHandler(w http.ResponseWriter, r *ht
 		return
 	}
 
-	computeHash := r.URL.Query().Get("computeHash") == "true"
-
 	rangeHeader := r.Header.Get("Range")
 
 	var rangeStart int64 = -1
@@ -230,7 +228,7 @@ func (c *ChunkedUploaderHandler) UploadChunkHandler(w http.ResponseWriter, r *ht
 	// it will be io.Reader sent wit application/octet-stream
 	fileReader := r.Body
 
-	h, err := c.service.UploadChunk(uploadId, fileReader, rangeStart, computeHash)
+	h, err := c.service.UploadChunk(uploadId, fileReader, rangeStart)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Failed to upload chunk: "+err.Error())
 		return
