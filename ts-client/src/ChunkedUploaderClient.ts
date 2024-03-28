@@ -1,68 +1,53 @@
-interface Endpoints {
-  init: string;
-  upload: string;
-  finish: string;
-}
-
-interface ChunkedUploaderClientProps {
-  endpoints: Endpoints;
-  headers?: HeadersInit;
-}
-
 export class ChunkedUploaderClient {
-  private config: ChunkedUploaderClientProps;
+  public endpoint: string;
+  public chunkSize: number;
+  public headers: HeadersInit;
+  public upload_id: string | null = null;
 
-  constructor(config: ChunkedUploaderClientProps) {
-    this.config = config;
+  constructor(endpoint: string, chunkSize: number, headers: HeadersInit) {
+    this.endpoint = endpoint;
+    this.chunkSize = chunkSize;
+    this.headers = headers;
   }
 
-  async upload(file: File, chunkSize: number): Promise<string> {
-    let { init, upload, finish } = this.config.endpoints;
-
-    const initResponse = await fetch(init, {
+  async upload(file: File, path: string, chunkSize: number): Promise<string> {
+    const initUrl = `${this.endpoint}/init`;
+    const initResponse = await fetch(initUrl, {
       method: "POST",
-      headers: this.config.headers,
-      body: JSON.stringify({ file_size: file.size }),
+      headers: this.headers,
+      body: JSON.stringify({ file_size: file.size, path }),
     });
 
     if (initResponse.status !== 201) {
       throw new Error("Failed to initialize upload");
     }
 
-    let upload_id;
     try {
       const data = await initResponse.json();
-      upload_id = data.upload_id;
+      this.upload_id = data.upload_id;
     } catch (error) {
       throw new Error("Failed to parse upload_id");
     }
 
-    if (!upload.includes("{upload_id}") || !finish.includes("{upload_id}")) {
-      throw new Error("Invalid endpoint configuration");
-    }
-
-    upload = upload.replace("{upload_id}", upload_id);
-    finish = finish.replace("{upload_id}", upload_id);
-
     const chunks = Math.ceil(file.size / chunkSize);
     const promises: Promise<Response>[] = [];
+    const uploadUrl = `${this.endpoint}/${this.upload_id}/upload`;
 
     for (let i = 0; i < chunks; i++) {
       const start = i * chunkSize;
       const end = Math.min(file.size, start + chunkSize);
       const chunk = file.slice(start, end);
-      const formData = new FormData();
-      formData.append("file", chunk);
 
       promises.push(
         new Promise((resolve, reject) => {
-          fetch(upload, {
+          fetch(uploadUrl, {
             method: "POST",
             headers: {
-              ...this.config.headers,
-              Range: `bytes=${start}-${end}`,
+              ...this.headers,
+              "Content-Range": `offset ${start}-${end}`,
+              "Content-Type": "application/octet-stream",
             },
-            body: formData,
+            body: chunk,
           })
             .then((res) => {
               resolve(res);
@@ -101,23 +86,24 @@ export class ChunkedUploaderClient {
       reader.readAsArrayBuffer(file);
     });
 
-    let path = "";
+    let resultPath = "";
+    const finishPath = `${this.endpoint}/${this.upload_id}/finish`;
 
     await Promise.all(promises)
       .then(async () => {
-        const response = await fetch(finish, {
+        const response = await fetch(finishPath, {
           method: "POST",
-          headers: this.config.headers,
-          body: JSON.stringify({ checksum: sha256 }),
+          headers: this.headers,
+          body: JSON.stringify({ checksum: sha256, resultPath }),
         });
 
-        if (response.status !== 201) {
+        if (response.status !== 200) {
           throw new Error("Failed to finish upload. Checksum mismatch.");
         }
 
         const data = await response.json();
         if (data.path) {
-          path = data.path;
+          resultPath = data.path;
         }
       })
       .catch((err) => {
@@ -125,6 +111,6 @@ export class ChunkedUploaderClient {
         throw new Error("Failed to upload file: " + err);
       });
 
-    return path;
+    return resultPath;
   }
 }

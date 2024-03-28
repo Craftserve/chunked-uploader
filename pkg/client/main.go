@@ -2,28 +2,14 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
-	"mime/multipart"
 	"net/http"
-	"os"
-	"strings"
-	"sync"
 )
-
-type ClientEndpoints struct {
-	Init   string
-	Upload string
-	Finish string
-}
-
-type ClientConfig struct {
-	Cookies []*http.Cookie
-}
 
 type InitResponse struct {
 	UploadID string `json:"upload_id"`
@@ -34,167 +20,131 @@ type FinishResponse struct {
 }
 
 type Client struct {
-	Endpoints ClientEndpoints
-	Config    ClientConfig
+	DoRequest func(req *http.Request) (*http.Response, error)
+	Endpoint  string
+	ChunkSize int64
+	UploadId  *string
 }
 
-func NewClient(endpoints ClientEndpoints, config *ClientConfig) *Client {
-	return &Client{
-		Endpoints: endpoints,
-		Config:    *config,
-	}
-}
-
-func (c *Client) Upload(file os.File, chunkSize int64) (path string, err error) {
-	fileInfo, err := file.Stat()
+func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path string, err error) {
+	err = c.initUpload(ctx)
 	if err != nil {
 		return "", err
 	}
+	chunkUrl := fmt.Sprintf("%s/%s/upload", c.Endpoint, *c.UploadId)
 
-	body := bytes.NewBuffer([]byte(fmt.Sprintf(`{"file_size": %d}`, fileInfo.Size())))
+	var chunkOffset int64
+	hash := sha256.New()
+	hashingReader := io.TeeReader(fileReader, hash)
 
-	req, err := http.NewRequest("POST", c.Endpoints.Init, body)
-	if err != nil {
-		return "", err
-	}
+	for {
+		chunkReader := io.LimitedReader{R: hashingReader, N: c.ChunkSize}
 
-	req.Header.Set("Content-Type", "application/json")
-	for _, cookie := range c.Config.Cookies {
-		req.AddCookie(cookie)
-	}
-
-	client := &http.Client{}
-	res, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("failed to create upload")
-	}
-
-	var response InitResponse
-	err = json.NewDecoder(res.Body).Decode(&response)
-	if err != nil {
-		return "", fmt.Errorf("could not decode request %w", err)
-	}
-
-	upload_id := response.UploadID
-
-	c.Endpoints.Upload = strings.Replace(c.Endpoints.Upload, "{upload_id}", upload_id, 1)
-	c.Endpoints.Finish = strings.Replace(c.Endpoints.Finish, "{upload_id}", upload_id, 1)
-
-	noOfChunks := math.Ceil(float64(fileInfo.Size() / chunkSize))
-
-	var wg sync.WaitGroup
-	errc := make(chan error, 10)
-
-	for i := 0; i < int(noOfChunks); i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-
-			start := int64(i) * chunkSize
-			end := int(math.Min(float64(fileInfo.Size()), float64(start+chunkSize)))
-			file.Seek(int64(start), 0)
-			chunk := make([]byte, int64(end)-start)
-			_, err := file.Read(chunk)
-			if err != nil {
-				errc <- err
-				return
-			}
-
-			bodyFormData := &bytes.Buffer{}
-			writer := multipart.NewWriter(bodyFormData)
-			part, err := writer.CreateFormFile("file", "file")
-			if err != nil {
-				errc <- err
-				return
-			}
-
-			part.Write(chunk)
-			err = writer.Close()
-			if err != nil {
-				errc <- err
-				return
-			}
-
-			req, err := http.NewRequest("POST", c.Endpoints.Upload, bodyFormData)
-			if err != nil {
-				errc <- err
-				return
-			}
-
-			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end-1))
-			for _, cookie := range c.Config.Cookies {
-				req.AddCookie(cookie)
-			}
-			client := &http.Client{}
-			res, err := client.Do(req)
-			if err != nil {
-				errc <- err
-				return
-			}
-
-			defer res.Body.Close()
-
-			if res.StatusCode != http.StatusCreated {
-				errc <- fmt.Errorf("failed to upload chunk")
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	close(errc)
-
-	for err := range errc {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, chunkUrl, &chunkReader)
 		if err != nil {
 			return "", err
 		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("Content-Range", fmt.Sprintf("offset=%d", chunkOffset))
+
+		res, err := c.DoRequest(req)
+		if err != nil {
+			return "", fmt.Errorf("failed to upload chunk %w", err)
+		}
+		defer res.Body.Close()
+
+		chunkOffset += c.ChunkSize - chunkReader.N
+
+		if res.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("failed to upload chunk %s", getJsonError(res.Body))
+		}
+
+		if chunkReader.N == 0 {
+			break
+		}
 	}
 
-	file.Seek(0, 0)
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, &file); err != nil {
-		return "", err
-	}
-
-	hexHash := hex.EncodeToString(hash.Sum(nil))
-	body = bytes.NewBuffer([]byte(fmt.Sprintf(`{"checksum": "%x"}`, hexHash)))
-
-	req, err = http.NewRequest("POST", c.Endpoints.Finish, body)
+	path, err = c.finishUpload(ctx, hex.EncodeToString(hash.Sum(nil)))
 	if err != nil {
 		return "", err
 	}
 
+	return path, nil
+}
+
+func (c *Client) initUpload(ctx context.Context) error {
+	var args = struct {
+		FileSize *int64 `json:"file_size"`
+	}{
+		FileSize: nil,
+	}
+
+	var resp InitResponse
+	err := c.sendJsonRequest(ctx, c.Endpoint+"/init", args, http.StatusCreated, &resp)
+	if err != nil {
+		return err
+	}
+	c.UploadId = &resp.UploadID
+	return nil
+}
+
+func (c *Client) finishUpload(ctx context.Context, hash string) (string, error) {
+	var args = struct {
+		Checksum string `json:"checksum"`
+	}{
+		Checksum: hash,
+	}
+
+	finishUrl := fmt.Sprintf("%s/%s/finish", c.Endpoint, *c.UploadId)
+
+	var resp FinishResponse
+	err := c.sendJsonRequest(ctx, finishUrl, &args, http.StatusOK, &resp)
+	if err != nil {
+		return "", err
+	}
+
+	return resp.Path, nil
+}
+
+func (c *Client) sendJsonRequest(ctx context.Context, url string, args interface{}, expectedStatus int, response interface{}) error {
+	var reqBody *bytes.Buffer
+	if args != nil {
+		reqBody = &bytes.Buffer{}
+		err := json.NewEncoder(reqBody).Encode(args)
+		if err != nil {
+			return err
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, reqBody)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
-	for _, cookie := range c.Config.Cookies {
-		req.AddCookie(cookie)
-	}
 
-	client = &http.Client{}
-
-	res, err = client.Do(req)
+	resp, err := c.DoRequest(req)
 	if err != nil {
-		return "", err
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != expectedStatus {
+		return fmt.Errorf("server error: %s", resp.Status)
 	}
 
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("failed to finish upload")
-	}
-
-	var finishResponse FinishResponse
-	err = json.NewDecoder(res.Body).Decode(&finishResponse)
+	err = json.NewDecoder(resp.Body).Decode(response)
 	if err != nil {
-		return "", fmt.Errorf("could not decode request %w", err)
+		return fmt.Errorf("could not decode response %w", err)
+	}
+	return nil
+}
+
+func getJsonError(body io.Reader) string {
+	var response map[string]interface{}
+	err := json.NewDecoder(body).Decode(&response)
+	if err != nil {
+		return err.Error()
 	}
 
-	return finishResponse.Path, nil
+	return response["error"].(string)
 }
