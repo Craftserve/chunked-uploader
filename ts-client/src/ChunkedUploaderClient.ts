@@ -16,13 +16,13 @@ export class ChunkedUploaderClient {
     this.config = config;
   }
 
-  async upload(file: File, chunkSize: number): Promise<string> {
+  async upload(file: File, path: string, chunkSize: number): Promise<string> {
     let { init, upload, finish } = this.config.endpoints;
 
     const initResponse = await fetch(init, {
       method: "POST",
       headers: this.config.headers,
-      body: JSON.stringify({ file_size: file.size }),
+      body: JSON.stringify({ file_size: file.size, path }),
     });
 
     if (initResponse.status !== 201) {
@@ -101,14 +101,14 @@ export class ChunkedUploaderClient {
       reader.readAsArrayBuffer(file);
     });
 
-    let path = "";
+    let resultPath = "";
 
     await Promise.all(promises)
       .then(async () => {
         const response = await fetch(finish, {
           method: "POST",
           headers: this.config.headers,
-          body: JSON.stringify({ checksum: sha256 }),
+          body: JSON.stringify({ checksum: sha256, resultPath }),
         });
 
         if (response.status !== 201) {
@@ -117,7 +117,7 @@ export class ChunkedUploaderClient {
 
         const data = await response.json();
         if (data.path) {
-          path = data.path;
+          resultPath = data.path;
         }
       })
       .catch((err) => {
@@ -125,6 +125,6 @@ export class ChunkedUploaderClient {
         throw new Error("Failed to upload file: " + err);
       });
 
-    return path;
+    return resultPath;
   }
 }
