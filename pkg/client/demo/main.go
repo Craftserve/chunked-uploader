@@ -14,7 +14,7 @@ func main() {
 
 	client := client.Client{
 		Endpoint:  "http://localhost:8081",
-		ChunkSize: 500,
+		ChunkSize: 200,
 		DoRequest: httpClient.Do,
 	}
 

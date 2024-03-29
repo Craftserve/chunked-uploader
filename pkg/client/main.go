@@ -63,15 +63,12 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 		}
 		defer res.Body.Close()
 
-		chunkOffset += c.ChunkSize - chunkReader.N
+		chunkOffset += n
 
 		if res.StatusCode != http.StatusOK {
 			return "", fmt.Errorf("failed to upload chunk %s", getJsonError(res.Body))
 		}
 
-		if chunkReader.N == 0 {
-			break
-		}
 	}
 
 	path, err = c.finishUpload(ctx, hex.EncodeToString(hash.Sum(nil)))
