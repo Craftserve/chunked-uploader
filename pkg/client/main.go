@@ -33,29 +33,20 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 	}
 	chunkUrl := fmt.Sprintf("%s/%s/upload", c.Endpoint, *c.UploadId)
 
-	var chunkOffset int64
 	hash := sha256.New()
 	hashingReader := io.TeeReader(fileReader, hash)
 
+	chunkReader := io.LimitedReader{R: hashingReader, N: c.ChunkSize}
+
 	for {
-		chunkReader := io.LimitedReader{R: hashingReader, N: c.ChunkSize}
-
-		buffer := new(bytes.Buffer)
-		n, err := io.Copy(buffer, &chunkReader)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, chunkUrl, &chunkReader)
 		if err != nil {
-			return "", err
-		}
-
-		if n == 0 {
-			break
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, chunkUrl, buffer)
-		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			return "", err
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
-		req.Header.Set("Content-Range", fmt.Sprintf("offset=%d-", chunkOffset))
 
 		res, err := c.DoRequest(req)
 		if err != nil {
@@ -63,12 +54,13 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 		}
 		defer res.Body.Close()
 
-		chunkOffset += n
-
 		if res.StatusCode != http.StatusOK {
 			return "", fmt.Errorf("failed to upload chunk %s", getJsonError(res.Body))
 		}
 
+		if chunkReader.N == 0 {
+			break
+		}
 	}
 
 	path, err = c.finishUpload(ctx, hex.EncodeToString(hash.Sum(nil)))
