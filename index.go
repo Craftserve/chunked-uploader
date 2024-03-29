@@ -299,7 +299,7 @@ func createFile(fs afero.Fs, path string) (file afero.File, err error) {
 // parseRangeHeader parses a range header and returns range start
 func parseRangeHeader(rangeHeader string) (int64, error) {
 	var start int64
-	_, err := fmt.Sscanf(rangeHeader, "bytes %d-", &start)
+	_, err := fmt.Sscanf(rangeHeader, "offset=%d-", &start)
 	if err != nil {
 		return 0, err
 	}
