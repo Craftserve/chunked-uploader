@@ -44,7 +44,7 @@ export class ChunkedUploaderClient {
             method: "POST",
             headers: {
               ...this.headers,
-              "Content-Range": `offset ${start}-${end}`,
+              "Content-Range": `offset=${start}-`,
               "Content-Type": "application/octet-stream",
             },
             body: chunk,

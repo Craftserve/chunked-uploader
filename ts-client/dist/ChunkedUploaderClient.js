@@ -42,7 +42,7 @@ export class ChunkedUploaderClient {
                 promises.push(new Promise((resolve, reject) => {
                     fetch(uploadUrl, {
                         method: "POST",
-                        headers: Object.assign(Object.assign({}, this.headers), { "Content-Range": `offset ${start}-${end}`, "Content-Type": "application/octet-stream" }),
+                        headers: Object.assign(Object.assign({}, this.headers), { "Content-Range": `offset=${start}-`, "Content-Type": "application/octet-stream" }),
                         body: chunk,
                     })
                         .then((res) => {

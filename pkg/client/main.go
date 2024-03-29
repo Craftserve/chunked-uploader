@@ -45,7 +45,7 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 			return "", err
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
-		req.Header.Set("Content-Range", fmt.Sprintf("offset=%d", chunkOffset))
+		req.Header.Set("Content-Range", fmt.Sprintf("offset=%d-", chunkOffset))
 
 		res, err := c.DoRequest(req)
 		if err != nil {
