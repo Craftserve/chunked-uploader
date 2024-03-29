@@ -8,46 +8,42 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 export class ChunkedUploaderClient {
-    constructor(config) {
-        this.config = config;
+    constructor(endpoint, chunkSize, headers) {
+        this.upload_id = null;
+        this.endpoint = endpoint;
+        this.chunkSize = chunkSize;
+        this.headers = headers;
     }
-    upload(file, chunkSize) {
+    upload(file, path, chunkSize) {
         return __awaiter(this, void 0, void 0, function* () {
-            let { init, upload, finish } = this.config.endpoints;
-            const initResponse = yield fetch(init, {
+            const initUrl = `${this.endpoint}/init`;
+            const initResponse = yield fetch(initUrl, {
                 method: "POST",
-                headers: this.config.headers,
-                body: JSON.stringify({ file_size: file.size }),
+                headers: this.headers,
+                body: JSON.stringify({ file_size: file.size, path }),
             });
             if (initResponse.status !== 201) {
                 throw new Error("Failed to initialize upload");
             }
-            let upload_id;
             try {
                 const data = yield initResponse.json();
-                upload_id = data.upload_id;
+                this.upload_id = data.upload_id;
             }
             catch (error) {
                 throw new Error("Failed to parse upload_id");
             }
-            if (!upload.includes("{upload_id}") || !finish.includes("{upload_id}")) {
-                throw new Error("Invalid endpoint configuration");
-            }
-            upload = upload.replace("{upload_id}", upload_id);
-            finish = finish.replace("{upload_id}", upload_id);
             const chunks = Math.ceil(file.size / chunkSize);
             const promises = [];
+            const uploadUrl = `${this.endpoint}/${this.upload_id}/upload`;
             for (let i = 0; i < chunks; i++) {
                 const start = i * chunkSize;
                 const end = Math.min(file.size, start + chunkSize);
                 const chunk = file.slice(start, end);
-                const formData = new FormData();
-                formData.append("file", chunk);
                 promises.push(new Promise((resolve, reject) => {
-                    fetch(upload, {
+                    fetch(uploadUrl, {
                         method: "POST",
-                        headers: Object.assign(Object.assign({}, this.config.headers), { Range: `bytes=${start}-${end}` }),
-                        body: formData,
+                        headers: Object.assign(Object.assign({}, this.headers), { "Content-Range": `offset ${start}-${end}`, "Content-Type": "application/octet-stream" }),
+                        body: chunk,
                     })
                         .then((res) => {
                         resolve(res);
@@ -81,27 +77,28 @@ export class ChunkedUploaderClient {
                 };
                 reader.readAsArrayBuffer(file);
             });
-            let path = "";
+            let resultPath = "";
+            const finishPath = `${this.endpoint}/${this.upload_id}/finish`;
             yield Promise.all(promises)
                 .then(() => __awaiter(this, void 0, void 0, function* () {
-                const response = yield fetch(finish, {
+                const response = yield fetch(finishPath, {
                     method: "POST",
-                    headers: this.config.headers,
-                    body: JSON.stringify({ checksum: sha256 }),
+                    headers: this.headers,
+                    body: JSON.stringify({ checksum: sha256, resultPath }),
                 });
                 if (response.status !== 201) {
                     throw new Error("Failed to finish upload. Checksum mismatch.");
                 }
                 const data = yield response.json();
                 if (data.path) {
-                    path = data.path;
+                    resultPath = data.path;
                 }
             }))
                 .catch((err) => {
                 console.error(err);
                 throw new Error("Failed to upload file: " + err);
             });
-            return path;
+            return resultPath;
         });
     }
 }
