@@ -40,7 +40,17 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 	for {
 		chunkReader := io.LimitedReader{R: hashingReader, N: c.ChunkSize}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, chunkUrl, &chunkReader)
+		buffer := new(bytes.Buffer)
+		n, err := io.Copy(buffer, &chunkReader)
+		if err != nil {
+			return "", err
+		}
+
+		if n == 0 {
+			break
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, chunkUrl, buffer)
 		if err != nil {
 			return "", err
 		}

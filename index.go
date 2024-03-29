@@ -49,7 +49,7 @@ func (c *ChunkedUploaderService) createUpload(uploadId string, maxSize int64) (e
 
 	defer file.Close()
 
-	if maxSize != -1 {
+	if maxSize > 0 {
 		err = file.Truncate(maxSize)
 		if err != nil {
 			return fmt.Errorf("Failed to preallocate file size: "+err.Error(), http.StatusInternalServerError)
