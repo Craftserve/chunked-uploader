@@ -86,7 +86,7 @@ export class ChunkedUploaderClient {
                     headers: this.headers,
                     body: JSON.stringify({ checksum: sha256, resultPath }),
                 });
-                if (response.status !== 200) {
+                if (response.status !== 201) {
                     throw new Error("Failed to finish upload. Checksum mismatch.");
                 }
                 const data = yield response.json();
