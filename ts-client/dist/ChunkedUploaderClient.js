@@ -20,7 +20,10 @@ export class ChunkedUploaderClient {
             const initResponse = yield fetch(initUrl, {
                 method: "POST",
                 headers: this.headers,
-                body: JSON.stringify({ file_size: file.size, path }),
+                body: JSON.stringify({
+                    file_size: file.size,
+                    path: `${path}${file.name}`,
+                }),
             });
             if (initResponse.status !== 201) {
                 throw new Error("Failed to initialize upload");
@@ -84,7 +87,10 @@ export class ChunkedUploaderClient {
                 const response = yield fetch(finishPath, {
                     method: "POST",
                     headers: this.headers,
-                    body: JSON.stringify({ checksum: sha256, resultPath }),
+                    body: JSON.stringify({
+                        checksum: sha256,
+                        path: `${path}${file.name}`,
+                    }),
                 });
                 if (response.status !== 200) {
                     throw new Error("Failed to finish upload. Checksum mismatch.");
