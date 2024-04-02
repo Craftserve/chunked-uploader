@@ -15,7 +15,10 @@ export class ChunkedUploaderClient {
     const initResponse = await fetch(initUrl, {
       method: "POST",
       headers: this.headers,
-      body: JSON.stringify({ file_size: file.size, path }),
+      body: JSON.stringify({
+        file_size: file.size,
+        path: `${path}${file.name}`,
+      }),
     });
 
     if (initResponse.status !== 201) {
@@ -94,7 +97,10 @@ export class ChunkedUploaderClient {
         const response = await fetch(finishPath, {
           method: "POST",
           headers: this.headers,
-          body: JSON.stringify({ checksum: sha256, resultPath }),
+          body: JSON.stringify({
+            checksum: sha256,
+            path: `${path}${file.name}`,
+          }),
         });
 
         if (response.status !== 200) {
