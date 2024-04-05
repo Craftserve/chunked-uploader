@@ -27,11 +27,12 @@ const (
 )
 
 type ChunkedUploaderService struct {
-	fs afero.Fs
+	fs          afero.Fs
+	maxFileSize *int64
 }
 
-func NewChunkedUploaderService(fs afero.Fs) *ChunkedUploaderService {
-	return &ChunkedUploaderService{fs: fs}
+func NewChunkedUploaderService(fs afero.Fs, maxFileSize *int64) *ChunkedUploaderService {
+	return &ChunkedUploaderService{fs: fs, maxFileSize: maxFileSize}
 }
 
 func (c *ChunkedUploaderService) generateUploadId() string {
@@ -69,6 +70,17 @@ func (c *ChunkedUploaderService) writePart(path string, reader io.Reader, offset
 		return h, err
 	}
 	defer file.Close()
+
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return h, err
+	}
+
+	if c.maxFileSize != nil {
+		if fileInfo.Size() >= *c.maxFileSize {
+			return h, fmt.Errorf("file_size_exceeds_maximum")
+		}
+	}
 
 	writer = io.MultiWriter(file, hasher)
 
