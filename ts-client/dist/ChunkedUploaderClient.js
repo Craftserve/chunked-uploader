@@ -14,7 +14,7 @@ export class ChunkedUploaderClient {
         this.chunkSize = chunkSize;
         this.headers = headers;
     }
-    upload(file, path, chunkSize) {
+    uploadAsync(file, path, chunkSize) {
         return __awaiter(this, void 0, void 0, function* () {
             const initUrl = `${this.endpoint}/init`;
             const initResponse = yield fetch(initUrl, {
@@ -104,6 +104,84 @@ export class ChunkedUploaderClient {
                 console.error(err);
                 throw new Error("Failed to upload file: " + err);
             });
+            return resultPath;
+        });
+    }
+    upload(file, path, chunkSize) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const initUrl = `${this.endpoint}/init`;
+            const initResponse = yield fetch(initUrl, {
+                method: "POST",
+                headers: this.headers,
+                body: JSON.stringify({
+                    file_size: file.size,
+                    path: `${path}${file.name}`,
+                }),
+            });
+            if (initResponse.status !== 201) {
+                throw new Error("Failed to initialize upload");
+            }
+            try {
+                const data = yield initResponse.json();
+                this.upload_id = data.upload_id;
+            }
+            catch (error) {
+                throw new Error("Failed to parse upload_id");
+            }
+            const chunks = Math.ceil(file.size / chunkSize);
+            const uploadUrl = `${this.endpoint}/${this.upload_id}/upload`;
+            for (let i = 0; i < chunks; i++) {
+                const start = i * chunkSize;
+                const end = Math.min(file.size, start + chunkSize);
+                const chunk = file.slice(start, end);
+                yield fetch(uploadUrl, {
+                    method: "POST",
+                    headers: Object.assign(Object.assign({}, this.headers), { "Content-Range": `offset=${start}-`, "Content-Type": "application/octet-stream" }),
+                    body: chunk,
+                }).catch((err) => {
+                    throw new Error("Failed to upload file: " + err);
+                });
+            }
+            const sha256 = yield new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const buffer = e.target.result;
+                    const hash = crypto.subtle.digest("SHA-256", buffer);
+                    hash
+                        .then((res) => {
+                        const hashArray = Array.from(new Uint8Array(res));
+                        const hashHex = hashArray
+                            .map((b) => b.toString(16).padStart(2, "0"))
+                            .join("");
+                        resolve(hashHex);
+                    })
+                        .catch((err) => {
+                        console.error(err);
+                        throw new Error("Failed to calculate checksum");
+                    });
+                };
+                reader.onerror = (e) => {
+                    throw new Error("Failed to read file: " + reader.error);
+                };
+                reader.readAsArrayBuffer(file);
+            });
+            const finishPath = `${this.endpoint}/${this.upload_id}/finish`;
+            let resultPath = "";
+            const response = yield fetch(finishPath, {
+                method: "POST",
+                headers: this.headers,
+                body: JSON.stringify({
+                    checksum: sha256,
+                    path: `${path}${file.name}`,
+                }),
+            });
+            if (response.status !== 200) {
+                throw new Error("Failed to finish upload. Checksum mismatch.");
+            }
+            const data = yield response.json();
+            if (data.path) {
+                resultPath = data.path;
+            }
             return resultPath;
         });
     }

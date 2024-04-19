@@ -4,5 +4,6 @@ export declare class ChunkedUploaderClient {
     headers: HeadersInit;
     upload_id: string | null;
     constructor(endpoint: string, chunkSize: number, headers: HeadersInit);
+    uploadAsync(file: File, path: string, chunkSize: number): Promise<string>;
     upload(file: File, path: string, chunkSize: number): Promise<string>;
 }
