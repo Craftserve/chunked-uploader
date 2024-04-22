@@ -164,6 +164,7 @@ export class ChunkedUploaderClient {
         headers: {
           ...this.headers,
           "Content-Range": `offset=${start}-`,
+          "Content-Size": file.size.toString(),
           "Content-Type": "application/octet-stream",
         },
         body: chunk,
