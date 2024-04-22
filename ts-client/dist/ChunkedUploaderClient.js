@@ -107,7 +107,7 @@ export class ChunkedUploaderClient {
             return resultPath;
         });
     }
-    upload(file, path, chunkSize) {
+    upload(file, path, chunkSize, onChunkUpload) {
         return __awaiter(this, void 0, void 0, function* () {
             const initUrl = `${this.endpoint}/init`;
             const initResponse = yield fetch(initUrl, {
@@ -138,7 +138,13 @@ export class ChunkedUploaderClient {
                     method: "POST",
                     headers: Object.assign(Object.assign({}, this.headers), { "Content-Range": `offset=${start}-`, "Content-Type": "application/octet-stream" }),
                     body: chunk,
-                }).catch((err) => {
+                })
+                    .then((res) => {
+                    if (onChunkUpload) {
+                        onChunkUpload(end);
+                    }
+                })
+                    .catch((err) => {
                     throw new Error("Failed to upload file: " + err);
                 });
             }
