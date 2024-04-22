@@ -124,7 +124,12 @@ export class ChunkedUploaderClient {
     return resultPath;
   }
 
-  async upload(file: File, path: string, chunkSize: number): Promise<string> {
+  async upload(
+    file: File,
+    path: string,
+    chunkSize: number,
+    onChunkUpload?: (currentSize: number) => void
+  ): Promise<string> {
     const initUrl = `${this.endpoint}/init`;
     const initResponse = await fetch(initUrl, {
       method: "POST",
@@ -162,9 +167,15 @@ export class ChunkedUploaderClient {
           "Content-Type": "application/octet-stream",
         },
         body: chunk,
-      }).catch((err) => {
-        throw new Error("Failed to upload file: " + err);
-      });
+      })
+        .then((res) => {
+          if (onChunkUpload) {
+            onChunkUpload(end);
+          }
+        })
+        .catch((err) => {
+          throw new Error("Failed to upload file: " + err);
+        });
     }
 
     const sha256 = await new Promise((resolve) => {

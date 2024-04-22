@@ -12,7 +12,7 @@ import (
 func main() {
 	fs := afero.NewOsFs()
 	rootFs := afero.NewBasePathFs(fs, ".") // just to show that you can use base path fs
-	service := chunkeduploader.NewChunkedUploaderService(rootFs)
+	service := chunkeduploader.NewChunkedUploaderService(rootFs, nil)
 	handlers := chunkeduploader.NewChunkedUploaderHandler(service)
 
 	r := mux.NewRouter()
