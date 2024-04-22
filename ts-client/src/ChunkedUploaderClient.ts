@@ -151,39 +151,38 @@ export class ChunkedUploaderClient {
       throw new Error("Failed to parse upload_id");
     }
 
-    const chunks = Math.ceil(file.size / chunkSize);
-    const uploadUrl = `${this.endpoint}/${this.upload_id}/upload`;
+    try {
+      const chunks = Math.ceil(file.size / chunkSize);
+      const uploadUrl = `${this.endpoint}/${this.upload_id}/upload`;
 
-    for (let i = 0; i < chunks; i++) {
-      const start = i * chunkSize;
-      const end = Math.min(file.size, start + chunkSize);
-      const chunk = file.slice(start, end);
+      for (let i = 0; i < chunks; i++) {
+        const start = i * chunkSize;
+        const end = Math.min(file.size, start + chunkSize);
+        const chunk = file.slice(start, end);
 
-      console.debug("[chunked-uploader ts-client] Uploading chunk: ", {
-        start,
-        end,
-      });
-
-      await fetch(uploadUrl, {
-        method: "POST",
-        headers: {
-          ...this.headers,
-          "Content-Range": `offset=${start}-`,
-          "Content-Size": file.size.toString(),
-          "Content-Type": "application/octet-stream",
-        },
-        body: chunk,
-      })
-        .then((res) => {
-          console.debug("[chunked-uploader ts-client] Chunk uploaded: ", end);
-          if (onChunkUpload) {
-            console.debug("[chunked-uploader ts-client] Calling onChunkUpload");
-            onChunkUpload(end);
-          }
-        })
-        .catch((err) => {
-          throw new Error("Failed to upload file: " + err);
+        console.debug("[chunked-uploader ts-client] Uploading chunk: ", {
+          start,
+          end,
         });
+
+        await fetch(uploadUrl, {
+          method: "POST",
+          headers: {
+            ...this.headers,
+            "Content-Range": `offset=${start}-`,
+            "Content-Size": file.size.toString(),
+            "Content-Type": "application/octet-stream",
+          },
+          body: chunk,
+        });
+        if (onChunkUpload) {
+          console.debug("[chunked-uploader ts-client] Chunk uploaded: ", end);
+          console.debug("[chunked-uploader ts-client] Calling onChunkUpload");
+          onChunkUpload(end);
+        }
+      }
+    } catch (error) {
+      throw new Error("Failed to upload file: " + error);
     }
 
     const sha256 = await new Promise((resolve) => {
