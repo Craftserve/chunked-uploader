@@ -136,7 +136,7 @@ export class ChunkedUploaderClient {
                 const chunk = file.slice(start, end);
                 yield fetch(uploadUrl, {
                     method: "POST",
-                    headers: Object.assign(Object.assign({}, this.headers), { "Content-Range": `offset=${start}-`, "Content-Type": "application/octet-stream" }),
+                    headers: Object.assign(Object.assign({}, this.headers), { "Content-Range": `offset=${start}-`, "Content-Size": file.size.toString(), "Content-Type": "application/octet-stream" }),
                     body: chunk,
                 })
                     .then((res) => {
