@@ -159,6 +159,11 @@ export class ChunkedUploaderClient {
       const end = Math.min(file.size, start + chunkSize);
       const chunk = file.slice(start, end);
 
+      console.debug("[chunked-uploader ts-client] Uploading chunk: ", {
+        start,
+        end,
+      });
+
       await fetch(uploadUrl, {
         method: "POST",
         headers: {
@@ -170,7 +175,9 @@ export class ChunkedUploaderClient {
         body: chunk,
       })
         .then((res) => {
+          console.debug("[chunked-uploader ts-client] Chunk uploaded: ", end);
           if (onChunkUpload) {
+            console.debug("[chunked-uploader ts-client] Calling onChunkUpload");
             onChunkUpload(end);
           }
         })

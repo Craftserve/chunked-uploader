@@ -134,13 +134,19 @@ export class ChunkedUploaderClient {
                 const start = i * chunkSize;
                 const end = Math.min(file.size, start + chunkSize);
                 const chunk = file.slice(start, end);
+                console.debug("[chunked-uploader ts-client] Uploading chunk: ", {
+                    start,
+                    end,
+                });
                 yield fetch(uploadUrl, {
                     method: "POST",
                     headers: Object.assign(Object.assign({}, this.headers), { "Content-Range": `offset=${start}-`, "Content-Size": file.size.toString(), "Content-Type": "application/octet-stream" }),
                     body: chunk,
                 })
                     .then((res) => {
+                    console.debug("[chunked-uploader ts-client] Chunk uploaded: ", end);
                     if (onChunkUpload) {
+                        console.debug("[chunked-uploader ts-client] Calling onChunkUpload");
                         onChunkUpload(end);
                     }
                 })
