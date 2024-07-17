@@ -8,6 +8,7 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -118,6 +119,7 @@ func (c *ChunkedUploaderService) Cleanup(duration time.Duration) {
 		}
 
 		if info.ModTime().Before(timeLimit) {
+			log.Printf("[ChunkedUploaderService] Removing old upload: %s, modified at: %s, now is: %s", path, info.ModTime(), time.Now())
 			return c.fs.Remove(path)
 		}
 
@@ -304,7 +306,7 @@ func openFile(fs afero.Fs, path string, flag int, perm os.FileMode) (file afero.
 
 // createFile creates a file with a given path and returns a file handle.
 func createFile(fs afero.Fs, path string) (file afero.File, err error) {
-	return openFile(fs, path, os.O_CREATE|os.O_RDWR, StandardAccess)
+	return openFile(fs, path, os.O_RDWR|os.O_CREATE, StandardAccess)
 }
 
 // parseRangeHeader parses a range header and returns range start
