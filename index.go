@@ -110,7 +110,7 @@ func (c *ChunkedUploaderService) writePart(path string, reader io.Reader, offset
 }
 
 // Cleanup removes old uploads that were created before a given timeLimit.
-func (c *ChunkedUploaderService) Cleanup(duration time.Duration) {
+func (c *ChunkedUploaderService) Cleanup(duration time.Duration) error {
 	timeLimit := time.Now().Add(-duration)
 
 	afero.Walk(c.fs, ".pending", func(path string, info fs.FileInfo, err error) error {
@@ -125,6 +125,8 @@ func (c *ChunkedUploaderService) Cleanup(duration time.Duration) {
 
 		return nil
 	})
+
+	return nil
 }
 
 // VerifyUpload verifies an upload by comparing the checksum of the uploaded file with an expected checksum.
