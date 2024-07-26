@@ -36,9 +36,8 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 	hash := sha256.New()
 	hashingReader := io.TeeReader(fileReader, hash)
 
-	chunkReader := io.LimitedReader{R: hashingReader, N: c.ChunkSize}
-
 	for {
+		chunkReader := io.LimitedReader{R: hashingReader, N: c.ChunkSize}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, chunkUrl, &chunkReader)
 		if err != nil {
 			if err == io.EOF {
@@ -58,9 +57,10 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 			return "", fmt.Errorf("failed to upload chunk %s", getJsonError(res.Body))
 		}
 
-		if chunkReader.N == 0 {
+		if chunkReader.N == c.ChunkSize {
 			break
 		}
+
 	}
 
 	path, err = c.finishUpload(ctx, hex.EncodeToString(hash.Sum(nil)))
