@@ -129,6 +129,17 @@ func (c *ChunkedUploaderService) Cleanup(duration time.Duration) error {
 	return nil
 }
 
+// Remove pending temporary file
+func (c *ChunkedUploaderService) RemovePendingFile(uploadId string) error {
+	path := getUploadFilePath(uploadId)
+	err := c.fs.Remove(path)
+	if err != nil {
+		return fmt.Errorf("Failed to remove pending file: " + err.Error())
+	}
+
+	return nil
+}
+
 // VerifyUpload verifies an upload by comparing the checksum of the uploaded file with an expected checksum.
 func (c *ChunkedUploaderService) verifyUpload(uploadId string, expectedChecksum string) error {
 	pendingPath := getUploadFilePath(uploadId)
