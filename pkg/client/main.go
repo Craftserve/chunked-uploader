@@ -27,7 +27,7 @@ type Client struct {
 }
 
 func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path string, err error) {
-	err = c.initUpload(ctx)
+	initUploadCookies, err := c.initUpload(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -46,6 +46,16 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 			return "", err
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
+
+		for _, cookie := range initUploadCookies {
+			if cookie == nil {
+				continue
+			}
+
+			if cookie.Name == "INGRESSCOOKIE" {
+				req.AddCookie(cookie)
+			}
+		}
 
 		res, err := c.DoRequest(req)
 		if err != nil {
@@ -71,7 +81,7 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 	return path, nil
 }
 
-func (c *Client) initUpload(ctx context.Context) error {
+func (c *Client) initUpload(ctx context.Context) (cookies []*http.Cookie, err error) {
 	var args = struct {
 		FileSize *int64 `json:"file_size"`
 	}{
@@ -79,12 +89,13 @@ func (c *Client) initUpload(ctx context.Context) error {
 	}
 
 	var resp InitResponse
-	err := c.sendJsonRequest(ctx, c.Endpoint+"/init", args, http.StatusCreated, &resp)
+	cookies, err = c.sendJsonRequest(ctx, c.Endpoint+"/init", args, http.StatusCreated, &resp)
 	if err != nil {
-		return err
+		return cookies, err
 	}
+
 	c.UploadId = &resp.UploadID
-	return nil
+	return cookies, nil
 }
 
 func (c *Client) finishUpload(ctx context.Context, hash string) (string, error) {
@@ -97,7 +108,7 @@ func (c *Client) finishUpload(ctx context.Context, hash string) (string, error) 
 	finishUrl := fmt.Sprintf("%s/%s/finish", c.Endpoint, *c.UploadId)
 
 	var resp FinishResponse
-	err := c.sendJsonRequest(ctx, finishUrl, &args, http.StatusOK, &resp)
+	_, err := c.sendJsonRequest(ctx, finishUrl, &args, http.StatusOK, &resp)
 	if err != nil {
 		return "", err
 	}
@@ -105,37 +116,38 @@ func (c *Client) finishUpload(ctx context.Context, hash string) (string, error) 
 	return resp.Path, nil
 }
 
-func (c *Client) sendJsonRequest(ctx context.Context, url string, args interface{}, expectedStatus int, response interface{}) error {
+func (c *Client) sendJsonRequest(ctx context.Context, url string, args interface{}, expectedStatus int, response interface{}) (resCookies []*http.Cookie, err error) {
 	var reqBody *bytes.Buffer
 	if args != nil {
 		reqBody = &bytes.Buffer{}
 		err := json.NewEncoder(reqBody).Encode(args)
 		if err != nil {
-			return err
+			return resCookies, err
 		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, reqBody)
 	if err != nil {
-		return err
+		return resCookies, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.DoRequest(req)
 	if err != nil {
-		return err
+		return resCookies, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != expectedStatus {
-		return fmt.Errorf("server error: %s", resp.Status)
+		return resCookies, fmt.Errorf("server error: %s", resp.Status)
 	}
 
 	err = json.NewDecoder(resp.Body).Decode(response)
 	if err != nil {
-		return fmt.Errorf("could not decode response %w", err)
+		return resCookies, fmt.Errorf("could not decode response %w", err)
 	}
-	return nil
+
+	return resp.Cookies(), nil
 }
 
 func getJsonError(body io.Reader) string {
