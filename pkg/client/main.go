@@ -20,14 +20,15 @@ type FinishResponse struct {
 }
 
 type Client struct {
-	DoRequest func(req *http.Request) (*http.Response, error)
-	Endpoint  string
-	ChunkSize int64
-	UploadId  *string
+	DoRequest     func(req *http.Request) (*http.Response, error)
+	Endpoint      string
+	ChunkSize     int64
+	UploadId      *string
+	ingressCookie *http.Cookie
 }
 
 func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path string, err error) {
-	initUploadCookies, err := c.initUpload(ctx)
+	err = c.initUpload(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -47,14 +48,8 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 
-		for _, cookie := range initUploadCookies {
-			if cookie == nil {
-				continue
-			}
-
-			if cookie.Name == "INGRESSCOOKIE" {
-				req.AddCookie(cookie)
-			}
+		if c.ingressCookie != nil {
+			req.AddCookie(c.ingressCookie)
 		}
 
 		res, err := c.DoRequest(req)
@@ -81,7 +76,7 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 	return path, nil
 }
 
-func (c *Client) initUpload(ctx context.Context) (cookies []*http.Cookie, err error) {
+func (c *Client) initUpload(ctx context.Context) (err error) {
 	var args = struct {
 		FileSize *int64 `json:"file_size"`
 	}{
@@ -89,13 +84,22 @@ func (c *Client) initUpload(ctx context.Context) (cookies []*http.Cookie, err er
 	}
 
 	var resp InitResponse
-	cookies, err = c.sendJsonRequest(ctx, c.Endpoint+"/init", args, http.StatusCreated, &resp)
+	cookies, err := c.sendJsonRequest(ctx, c.Endpoint+"/init", args, http.StatusCreated, &resp)
 	if err != nil {
-		return cookies, err
+		return fmt.Errorf("failed to init upload %w", err)
+	}
+	for _, cookie := range cookies {
+		if cookie == nil {
+			continue
+		}
+
+		if cookie.Name == "INGRESSCOOKIE" {
+			c.ingressCookie = cookie
+		}
 	}
 
 	c.UploadId = &resp.UploadID
-	return cookies, nil
+	return nil
 }
 
 func (c *Client) finishUpload(ctx context.Context, hash string) (string, error) {
@@ -110,7 +114,7 @@ func (c *Client) finishUpload(ctx context.Context, hash string) (string, error) 
 	var resp FinishResponse
 	_, err := c.sendJsonRequest(ctx, finishUrl, &args, http.StatusOK, &resp)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to finish upload %w", err)
 	}
 
 	return resp.Path, nil
@@ -131,6 +135,10 @@ func (c *Client) sendJsonRequest(ctx context.Context, url string, args interface
 		return resCookies, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	if c.ingressCookie != nil {
+		req.AddCookie(c.ingressCookie)
+	}
 
 	resp, err := c.DoRequest(req)
 	if err != nil {
