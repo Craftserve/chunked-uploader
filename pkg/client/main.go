@@ -27,10 +27,10 @@ type Client struct {
 	ingressCookie *http.Cookie
 }
 
-func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path string, err error) {
+func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path string, ingressCookie *http.Cookie, err error) {
 	err = c.initUpload(ctx)
 	if err != nil {
-		return "", err
+		return "", c.ingressCookie, err
 	}
 	chunkUrl := fmt.Sprintf("%s/%s/upload", c.Endpoint, *c.UploadId)
 
@@ -44,7 +44,7 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 			if err == io.EOF {
 				break
 			}
-			return "", err
+			return "", c.ingressCookie, err
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 
@@ -54,12 +54,12 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 
 		res, err := c.DoRequest(req)
 		if err != nil {
-			return "", fmt.Errorf("failed to upload chunk %w", err)
+			return "", c.ingressCookie, fmt.Errorf("failed to upload chunk %w", err)
 		}
 		defer res.Body.Close()
 
 		if res.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("failed to upload chunk %s", getJsonError(res.Body))
+			return "", c.ingressCookie, fmt.Errorf("failed to upload chunk %s", getJsonError(res.Body))
 		}
 
 		if chunkReader.N == c.ChunkSize {
@@ -70,10 +70,10 @@ func (c *Client) Upload(ctx context.Context, fileReader io.ReadCloser) (path str
 
 	path, err = c.finishUpload(ctx, hex.EncodeToString(hash.Sum(nil)))
 	if err != nil {
-		return "", err
+		return "", c.ingressCookie, err
 	}
 
-	return path, nil
+	return path, c.ingressCookie, nil
 }
 
 func (c *Client) initUpload(ctx context.Context) (err error) {
